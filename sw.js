@@ -2,7 +2,7 @@
    프로그램을 고쳐서 올릴 때마다 아래 CACHE 뒤의 숫자를 하나씩 올려 주십시오.
    그래야 휴대폰이 옛날 화면을 계속 보여주지 않습니다.            */
 
-const CACHE = 'expense-v5';
+const CACHE = 'expense-v6';
 const FILES = ['./', './index.html', './config.js', './manifest.json', './icon-192.png', './icon-512.png'];
 
 self.addEventListener('install', e => {

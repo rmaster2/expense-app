@@ -469,6 +469,7 @@ textarea.inp{height:auto;padding:12px 13px;resize:none;line-height:1.5}
       <h3>프로그램 정보</h3>
       <div class="row"><span class="k">버전</span><span class="v mono" id="dVer">—</span></div>
       <div class="row"><span class="k">실행 방식</span><span class="v" id="dMode">—</span></div>
+      <div class="row"><span class="k">글자 인식 엔진</span><span class="v" id="dOcrEngine">—</span></div>
       <div class="row"><span class="k">기기</span><span class="v" id="dUA" style="font-size:11.5px;font-weight:500">—</span></div>
     </div>
 
@@ -485,6 +486,28 @@ textarea.inp{height:auto;padding:12px 13px;resize:none;line-height:1.5}
 <div class="busy" id="busy">처리 중입니다…</div>
 
 <script src="./config.js"></script>
+<script type="importmap">
+{
+  "imports": {
+    "onnxruntime-web": "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.26.0/dist/ort.all.bundle.min.mjs",
+    "ppu-ocv/canvas-web": "https://cdn.jsdelivr.net/npm/ppu-ocv@3.3.0/index.canvas-web.js"
+  }
+}
+</script>
+<script type="module">
+/* 한글 영수증 전용 인식(PaddleOCR)을 준비합니다.
+   이 블록이 실패해도(회사 네트워크 차단 등) 아래 일반 스크립트가
+   자동으로 Tesseract.js 로 대체하므로 앱 사용에는 지장이 없습니다. */
+(async () => {
+  try {
+    const mod = await import('https://cdn.jsdelivr.net/npm/ppu-paddle-ocr@6.2.0/web/index.js');
+    window.__paddle = { PaddleOcrService: mod.PaddleOcrService, MODEL_PRESETS: mod.MODEL_PRESETS };
+  } catch (err) {
+    console.error('[PaddleOCR] 모듈을 불러오지 못했습니다. 기본 인식(Tesseract)으로 대체됩니다.', err);
+    window.__paddle = null;
+  }
+})();
+</script>
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
 <script>
 'use strict';
@@ -530,6 +553,7 @@ function toast(msg) {
   toastTimer = setTimeout(() => t.classList.remove('on'), 2200);
 }
 const busy = on => $('busy').classList.toggle('on', on);
+let lastOcrEngine = '—';   // 설정 화면에 표시할 최근 인식 엔진 이름
 
 
 /* ============================================================
@@ -676,21 +700,72 @@ function fillFromOcr() {
   toast(filled.length ? (filled.join('·') + ' 채웠습니다. 확인 후 저장하세요') : '인식하지 못했습니다. 직접 입력해 주세요');
 }
 
+/* ------------------------------------------------------------
+   한글 영수증 전용 모델(PaddleOCR v5-korean-mobile)을 브라우저
+   안에서 그대로 돌립니다. 서버로 사진을 보내지 않고, 유료 API도
+   쓰지 않습니다. 최초 1회만 인식 모델을 내려받아 브라우저에 남겨
+   두고, 이후에는 그 모델을 그대로 재사용합니다(추가 다운로드 없음).
+   모델을 못 받아오면(회사 네트워크 차단 등) 자동으로 기존
+   Tesseract.js 방식으로 대체하여, 어떤 경우에도 인식 기능 자체는
+   멈추지 않도록 만들었습니다.
+   ------------------------------------------------------------ */
+let paddleServicePromise = null;
+function warmUpPaddle() {
+  if (paddleServicePromise) return paddleServicePromise;
+  paddleServicePromise = (async () => {
+    // module 스크립트가 아직 못 끝냈을 수 있어 잠깐(최대 5초) 기다립니다.
+    for (let i = 0; i < 50 && window.__paddle === undefined; i++) {
+      await new Promise(r => setTimeout(r, 100));
+    }
+    if (!window.__paddle) throw new Error('PaddleOCR 모듈을 사용할 수 없습니다');
+    const { PaddleOcrService, MODEL_PRESETS } = window.__paddle;
+    const svc = new PaddleOcrService({ model: MODEL_PRESETS['v5-korean-mobile'] });
+    await svc.initialize();
+    return svc;
+  })();
+  paddleServicePromise.catch(err => {
+    console.warn('[PaddleOCR] 준비하지 못했습니다. 필요할 때 Tesseract로 대체합니다.', err);
+  });
+  return paddleServicePromise;
+}
+async function recognizeWithPaddle(blob) {
+  const svc = await warmUpPaddle();
+  const buf = await blob.arrayBuffer();
+  const result = await svc.recognize(buf, { flatten: true });
+  return result.text || '';
+}
+async function recognizeWithTesseract(blob) {
+  if (typeof Tesseract === 'undefined') throw new Error('Tesseract 를 불러오지 못했습니다');
+  const { data: { text } } = await Tesseract.recognize(blob, 'kor+eng');
+  return text || '';
+}
+
 async function runOcrOnPhoto() {
   const src = state.photo ? state.photo.blob
             : (state.keepReceiptId ? (await dbGet('receipts', state.keepReceiptId)).blob : null);
   if (!src) { toast('먼저 사진을 촬영하거나 선택해 주십시오'); return; }
-  if (typeof Tesseract === 'undefined') { toast('인식 프로그램을 불러오지 못했습니다. 인터넷 연결을 확인해 주십시오'); return; }
+
   busy(true);
   toast('글자를 읽는 중입니다\u2026 (처음에는 조금 더 걸릴 수 있습니다)');
+  let text = '', engine = '';
   try {
-    const { data: { text } } = await Tesseract.recognize(src, 'kor+eng');
-    $('fOcrText').value = text;
-    fillFromOcr();
+    text = await recognizeWithPaddle(src);
+    engine = 'PaddleOCR (한글 전용)';
   } catch (err) {
-    console.error(err);
-    toast('글자를 읽지 못했습니다. 아래 칸에 직접 붙여넣어 보십시오');
+    console.warn('[PaddleOCR] 인식에 실패해 Tesseract로 대체합니다', err);
+    try {
+      text = await recognizeWithTesseract(src);
+      engine = 'Tesseract (대체 방식)';
+    } catch (err2) {
+      console.error(err2);
+      busy(false);
+      toast('글자를 읽지 못했습니다. 아래 칸에 직접 붙여넣어 보십시오');
+      return;
+    }
   }
+  lastOcrEngine = engine;
+  $('fOcrText').value = text;
+  fillFromOcr();
   busy(false);
 }
 
@@ -854,6 +929,7 @@ async function openForm(id) {
   state.editingId = id || null;
   state.photo = null;
   state.keepReceiptId = null;
+  warmUpPaddle(); // 폼을 여는 시점에 미리 준비해 두면, 실제로 인식 버튼을 누를 때 더 빠릅니다
 
   const isEdit = !!id;
   $('fTitle').textContent = isEdit ? '내역 수정' : '영수증 추가';
@@ -1051,6 +1127,7 @@ async function refreshDiag() {
   $('dVer').textContent = CFG.version;
   const standalone = window.matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
   $('dMode').textContent = standalone ? '홈 화면 앱' : '브라우저';
+  $('dOcrEngine').textContent = lastOcrEngine;
   $('dUA').textContent = navigator.userAgent.slice(0, 110);
 }
 
