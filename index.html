@@ -349,6 +349,15 @@ textarea.inp{height:auto;padding:12px 13px;resize:none;line-height:1.5}
     </div>
 
     <div class="field">
+      <label for="fOcrText">영수증 글자로 자동 채우기 (선택)</label>
+      <textarea class="inp" id="fOcrText" rows="3" placeholder="사진을 길게 눌러 복사한 영수증 글자를 여기에 붙여넣으세요"></textarea>
+      <div class="photo-btns" style="margin-top:8px">
+        <button class="pbtn" id="btnOcrFill" type="button">자동 채우기</button>
+      </div>
+      <p class="hint">사진을 길게 눌러 "텍스트 복사"(또는 구글렌즈)로 글자를 복사해 붙여넣으면 금액·날짜·지출처를 자동으로 채워 드립니다. 채워진 내용은 꼭 확인 후 저장하십시오.</p>
+    </div>
+
+    <div class="field">
       <label for="fAmount">금액 (원)</label>
       <input class="inp amount" id="fAmount" type="text" inputmode="numeric" placeholder="0" autocomplete="off">
     </div>
@@ -605,6 +614,61 @@ async function makePhoto(source, rotate) {
 
 
 /* ============================================================
+   3b. 영수증 글자 자동 채우기 (붙여넣기 인식)
+   ------------------------------------------------------------
+   안드로이드 기본 기능(사진 길게 눌러 텍스트 복사, 구글렌즈 등)으로
+   복사한 영수증 글자를 정규식으로 읽어 금액·날짜·지출처를 채웁니다.
+   유료 OCR API는 쓰지 않으며, 인식 결과는 항상 사용자가 확인한
+   뒤 저장해야 합니다(자동 저장되지 않음).
+   ============================================================ */
+function parseReceiptText(text) {
+  const norm = String(text || '');
+  const result = { amount: null, date: null, place: null };
+
+  // 금액: "합계"를 최우선으로 봅니다. 매출전표는 부가세 전 "금액"과
+  // 부가세 포함 "합계"가 따로 있어, "금액"을 먼저 보면 틀린 값이 잡힙니다.
+  const amountKeywords = ['합\\s*계', '결제\\s*금액', '받을\\s*금액', '받은\\s*금액', '카드\\s*결제', '금\\s*액'];
+  for (const kw of amountKeywords) {
+    const re = new RegExp(kw + '\\s*[:：]?\\s*([0-9][0-9,]*)\\s*원?', 'g');
+    let m, last = null;
+    while ((m = re.exec(norm))) last = m;
+    if (last) { result.amount = Number(last[1].replace(/,/g, '')); break; }
+  }
+
+  // 날짜: YYYY/MM/DD, YYYY-MM-DD, YYYY.MM.DD 모두 인식
+  const dm = norm.match(/(20\d{2})[\/\-.](\d{1,2})[\/\-.](\d{1,2})/);
+  if (dm) result.date = dm[1] + '-' + pad2(Number(dm[2])) + '-' + pad2(Number(dm[3]));
+
+  // 지출처: "가맹점명" 라벨을 우선 사용. 없으면 전화번호(TEL) 줄
+  // 바로 앞줄을 상호명으로 봄(대부분 영수증이 상호명 다음 줄에 전화번호를
+  // 씀). 그래도 없으면 숫자/괄호로 시작하지 않는 첫 줄을 후보로 사용
+  const pm = norm.match(/가맹\s*점\s*명\s*[:：]?\s*([^\n]+)/);
+  if (pm) {
+    result.place = pm[1].trim();
+  } else {
+    const lines = norm.split(/\n/).map(s => s.trim()).filter(Boolean);
+    const telIdx = lines.findIndex(l => /TEL|전화|☎/i.test(l) || /\d{2,4}-\d{3,4}-\d{4}/.test(l));
+    if (telIdx > 0) result.place = lines[telIdx - 1].slice(0, 30);
+    else {
+      const firstLine = lines.find(l => !/^[0-9\[(]/.test(l));
+      if (firstLine) result.place = firstLine.slice(0, 30);
+    }
+  }
+  return result;
+}
+function fillFromOcr() {
+  const text = $('fOcrText').value;
+  if (!text.trim()) { toast('붙여넣은 글자가 없습니다'); return; }
+  const r = parseReceiptText(text);
+  const filled = [];
+  if (r.amount) { $('fAmount').value = comma(r.amount); filled.push('금액'); }
+  if (r.date)   { $('fDate').value = r.date; filled.push('날짜'); }
+  if (r.place)  { $('fPlace').value = r.place; filled.push('지출처'); }
+  toast(filled.length ? (filled.join('·') + ' 채웠습니다. 확인 후 저장하세요') : '인식하지 못했습니다. 직접 입력해 주세요');
+}
+
+
+/* ============================================================
    4. 목록 화면 그리기
    ============================================================ */
 function shiftMonth(ym, diff) {
@@ -775,6 +839,7 @@ async function openForm(id) {
   $('fDate').value   = e ? e.date : (state.ym === todayStr().slice(0, 7) ? todayStr() : state.ym + '-01');
   $('fPlace').value  = e ? (e.place || '') : '';
   $('fDesc').value   = e ? (e.desc || '') : '';
+  $('fOcrText').value = '';
   state.cat = e ? e.cat : CFG.categories[0];
   state.pay = e ? e.pay : CFG.payMethods[0];
 
@@ -1106,6 +1171,7 @@ $('btnAlbum').onclick  = () => $('fileAlbum').click();
 $('fileCamera').onchange = e => { pickFile(e.target.files[0]); e.target.value = ''; };
 $('fileAlbum').onchange  = e => { pickFile(e.target.files[0]); e.target.value = ''; };
 $('btnDropPhoto').onclick = () => { state.photo = null; state.keepReceiptId = null; showPhoto(null); };
+$('btnOcrFill').onclick = fillFromOcr;
 $('btnRotate').onclick = async () => {
   const src = state.photo ? state.photo.blob
             : (state.keepReceiptId ? (await dbGet('receipts', state.keepReceiptId)).blob : null);

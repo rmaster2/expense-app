@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>경비 관리자 도구</title>
+<style>
+:root{
+  --ink:#16181D; --paper:#F5F7FA; --card:#FFFFFF; --rule:#E1E5EC;
+  --muted:#6B7280; --stamp:#BF3A2B; --stamp-soft:#FBEEEC; --ok:#1F6F52; --ok-soft:#EAF3EE;
+  --sans:'Pretendard','Apple SD Gothic Neo','Noto Sans KR','Malgun Gothic',system-ui,-apple-system,sans-serif;
+  --num:ui-monospace,'SF Mono','Menlo','Roboto Mono','Consolas',monospace;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--paper);color:var(--ink);font-family:var(--sans);font-size:14px;line-height:1.55}
+.wrap{max-width:980px;margin:0 auto;padding:24px 20px 80px}
+h1{font-size:20px;margin:0 0 4px}
+.sub{color:var(--muted);font-size:13px;margin-bottom:24px}
+.card{background:var(--card);border-radius:12px;padding:18px 20px;margin-bottom:20px;box-shadow:0 1px 2px rgba(22,24,29,.06)}
+.card h2{font-size:15px;margin:0 0 4px;display:flex;align-items:center;gap:8px}
+.card h2 .n{display:inline-flex;width:22px;height:22px;border-radius:50%;background:var(--ink);color:#fff;font-size:12px;align-items:center;justify-content:center;flex:0 0 auto}
+.card p.desc{color:var(--muted);font-size:12.5px;margin:2px 0 14px}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th,td{padding:7px 8px;border-bottom:1px solid var(--rule);text-align:left}
+th{color:var(--muted);font-weight:600;font-size:12px}
+td input[type=text]{width:100%;border:1px solid transparent;background:transparent;padding:5px 6px;border-radius:6px;font:inherit}
+td input[type=text]:hover,td input[type=text]:focus{border-color:var(--rule);background:#FAFBFD;outline:none}
+.num{font-family:var(--num);font-variant-numeric:tabular-nums;text-align:right}
+.btnrow{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+button{font:inherit;cursor:pointer;border:none;border-radius:9px;padding:9px 14px;background:#EEF1F6;font-weight:600}
+button:hover{background:#E3E8F0}
+button.primary{background:var(--ink);color:#fff}
+button.primary:hover{background:#000}
+button.danger{background:var(--stamp-soft);color:var(--stamp)}
+button.small{padding:5px 10px;font-size:12px}
+button:disabled{opacity:.45;cursor:not-allowed}
+input[type=file]{font-size:13px}
+.pill{display:inline-block;padding:2px 9px;border-radius:20px;font-size:11.5px;font-weight:600;background:#EEF1F6;color:#414957}
+.pill.warn{background:var(--stamp-soft);color:var(--stamp)}
+.pill.ok{background:var(--ok-soft);color:var(--ok)}
+.msglist{margin:10px 0 0;padding:0;list-style:none;font-size:12.5px}
+.msglist li{padding:6px 10px;border-radius:8px;margin-bottom:6px}
+.msglist li.warn{background:var(--stamp-soft);color:var(--stamp)}
+.msglist li.ok{background:var(--ok-soft);color:var(--ok)}
+.total-row td{font-weight:700;border-top:2px solid var(--ink);border-bottom:none}
+.dept-cell{color:var(--muted);font-size:12px}
+.empty-note{color:var(--muted);font-size:12.5px;padding:14px 0;text-align:center}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>경비 관리자 도구</h1>
+  <div class="sub">여러 명이 제출한 경비 파일을 한 번에 모아 집계표(엑셀)로 만듭니다. 이 화면은 이 컴퓨터(브라우저) 안에서만 동작하며, 명부·업로드 내용은 어디로도 전송되지 않습니다.</div>
+
+  <div class="card">
+    <h2><span class="n">1</span>사원 명부</h2>
+    <p class="desc">이름과 소속(부서 또는 파견 근무처)을 관리합니다. 이 목록은 이 컴퓨터에만 저장되며, 깃허브 코드에는 들어가지 않습니다. 인원이 바뀌면 여기서 바로 추가·수정·삭제하십시오.</p>
+    <table>
+      <thead><tr><th style="width:45%">사원명</th><th>소속</th><th style="width:60px"></th></tr></thead>
+      <tbody id="rosterBody"></tbody>
+    </table>
+    <div class="btnrow">
+      <button id="btnAddRow">+ 사원 추가</button>
+      <button id="btnImportRoster">명부 파일 불러오기</button>
+      <button id="btnExportRoster">명부 백업 저장</button>
+      <input type="file" id="fileRoster" accept="application/json,.json" hidden>
+      <span id="rosterCount" class="pill" style="align-self:center"></span>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2><span class="n">2</span>제출 파일 업로드</h2>
+    <p class="desc">직원들이 앱에서 만들어 보낸 <b>경비제출_이름_YYYY-MM.json</b> 파일을 한 번에 여러 개 선택하십시오.</p>
+    <div class="btnrow">
+      <input type="file" id="fileSubmissions" accept="application/json,.json" multiple>
+    </div>
+    <ul class="msglist" id="uploadMsgs"></ul>
+  </div>
+
+  <div class="card">
+    <h2><span class="n">3</span>병합 결과 <span id="ymBadge" class="pill"></span></h2>
+    <p class="desc">명부에 있는 전원이 표시됩니다. 이번 달 제출이 없으면 0원으로 자동 표시됩니다.</p>
+    <table>
+      <thead><tr><th style="width:16%">소속</th><th style="width:20%">사원명</th><th>적요</th><th class="num" style="width:14%">금액</th><th class="num" style="width:14%">사원 합계</th></tr></thead>
+      <tbody id="mergeBody"></tbody>
+    </table>
+    <div id="mergeEmpty" class="empty-note">아직 병합할 자료가 없습니다. 위에서 명부와 제출 파일을 준비해 주십시오.</div>
+  </div>
+
+  <div class="card">
+    <h2><span class="n">4</span>엑셀 다운로드</h2>
+    <p class="desc">회계사무소 제출용 파일과 같은 구조(소속·사원명·적요·금액)로 내려받습니다.</p>
+    <div class="btnrow">
+      <button id="btnDownload" class="primary" disabled>엑셀 파일 만들기</button>
+    </div>
+  </div>
+</div>
+
+<script src="https://cdn.sheetjs.com/xlsx-latest/package/dist/xlsx.full.min.js"></script>
+<script>
+'use strict';
+const $ = id => document.getElementById(id);
+const ROSTER_KEY = 'admin_roster_v1';
+
+/* ---------------- 명부 ---------------- */
+let roster = [];
+function loadRoster() {
+  try { roster = JSON.parse(localStorage.getItem(ROSTER_KEY) || '[]'); }
+  catch (e) { roster = []; }
+}
+function saveRoster() {
+  localStorage.setItem(ROSTER_KEY, JSON.stringify(roster));
+  $('rosterCount').textContent = roster.length + '명';
+}
+function renderRoster() {
+  const body = $('rosterBody');
+  body.innerHTML = '';
+  roster.forEach((r, i) => {
+    const tr = document.createElement('tr');
+    tr.innerHTML =
+      '<td><input type="text" data-f="name" placeholder="사원명"></td>' +
+      '<td><input type="text" data-f="dept" placeholder="예: 영업부 / 파견처명"></td>' +
+      '<td><button class="small danger" data-del>삭제</button></td>';
+    tr.querySelector('[data-f=name]').value = r.name || '';
+    tr.querySelector('[data-f=dept]').value = r.dept || '';
+    tr.querySelector('[data-f=name]').addEventListener('input', e => { roster[i].name = e.target.value; saveRoster(); });
+    tr.querySelector('[data-f=dept]').addEventListener('input', e => { roster[i].dept = e.target.value; saveRoster(); });
+    tr.querySelector('[data-del]').addEventListener('click', () => { roster.splice(i, 1); saveRoster(); renderRoster(); });
+    body.appendChild(tr);
+  });
+  $('rosterCount').textContent = roster.length + '명';
+}
+$('btnAddRow').onclick = () => { roster.push({ name: '', dept: '' }); saveRoster(); renderRoster(); };
+$('btnImportRoster').onclick = () => $('fileRoster').click();
+$('fileRoster').onchange = async e => {
+  const file = e.target.files[0];
+  e.target.value = '';
+  if (!file) return;
+  try {
+    const data = JSON.parse(await file.text());
+    if (!Array.isArray(data)) throw new Error('형식이 다릅니다 (배열이어야 함)');
+    if (roster.length && !confirm('현재 명부(' + roster.length + '명)를 이 파일 내용(' + data.length + '명)으로 바꿉니다. 계속할까요?')) return;
+    roster = data.map(d => ({ name: String(d.name || '').trim(), dept: String(d.dept || '').trim() }));
+    saveRoster(); renderRoster();
+    alert('명부를 불러왔습니다 (' + roster.length + '명)');
+  } catch (err) { alert('명부 파일을 읽지 못했습니다: ' + err.message); }
+};
+$('btnExportRoster').onclick = () => {
+  const blob = new Blob([JSON.stringify(roster, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = '명부백업_' + todayStr() + '.json';
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 4000);
+};
+
+/* ---------------- 업로드 · 병합 ---------------- */
+let uploads = [];   // { name, ym, items:[{cat,적요,금액}], total }
+let batchYm = null;
+
+const pad2 = n => String(n).padStart(2, '0');
+function todayStr() {
+  const d = new Date();
+  return d.getFullYear() + pad2(d.getMonth() + 1) + pad2(d.getDate());
+}
+function comma(n) { return (n || 0).toLocaleString('ko-KR'); }
+
+function addMsg(text, cls) {
+  const li = document.createElement('li');
+  li.className = cls || '';
+  li.textContent = text;
+  $('uploadMsgs').appendChild(li);
+}
+
+$('fileSubmissions').addEventListener('change', async e => {
+  const files = [...e.target.files];
+  e.target.value = '';
+  $('uploadMsgs').innerHTML = '';
+  for (const file of files) {
+    try {
+      const data = JSON.parse(await file.text());
+      if (data.format !== 'expense-submission') throw new Error('제출 파일 형식이 아닙니다');
+      if (!batchYm) batchYm = data.ym;
+      if (data.ym !== batchYm) {
+        addMsg('건너뜀 — ' + file.name + ' (기준월이 ' + data.ym + '로, 이번 배치(' + batchYm + ')와 다릅니다)', 'warn');
+        continue;
+      }
+      const exists = uploads.findIndex(u => u.name === data.name);
+      if (exists >= 0) {
+        addMsg('중복 업로드 — "' + data.name + '" 파일이 두 번 이상 올라와 마지막 파일로 대체했습니다', 'warn');
+        uploads.splice(exists, 1);
+      }
+      const inRoster = roster.some(r => r.name === data.name);
+      if (!inRoster) addMsg('명부에 없는 이름 — "' + data.name + '" (명부에 추가하거나 이름 표기를 확인해 주십시오)', 'warn');
+      uploads.push({ name: data.name, ym: data.ym, items: data.items || [], total: data.total || 0 });
+      addMsg('처리됨 — ' + data.name + ' (' + (data.items || []).length + '건, ' + comma(data.total) + '원)', 'ok');
+    } catch (err) {
+      addMsg('읽지 못함 — ' + file.name + ': ' + err.message, 'warn');
+    }
+  }
+  computeMerge();
+});
+
+let mergedRows = [];   // xlsx 출력용 행 배열
+function computeMerge() {
+  $('ymBadge').textContent = batchYm ? batchYm + ' 기준' : '';
+
+  const blocks = [];
+  const usedNames = new Set();
+
+  // 명부 순서대로 우선 배치
+  roster.forEach(r => {
+    if (!r.name) return;
+    const u = uploads.find(x => x.name === r.name);
+    usedNames.add(r.name);
+    if (u) blocks.push({ dept: r.dept || '(소속 미지정)', name: r.name, items: u.items, total: u.total });
+    else   blocks.push({ dept: r.dept || '(소속 미지정)', name: r.name, items: [], total: 0 });
+  });
+  // 명부에 없지만 업로드된 사람은 뒤에 추가
+  uploads.forEach(u => {
+    if (!usedNames.has(u.name)) blocks.push({ dept: '(미확인)', name: u.name, items: u.items, total: u.total });
+  });
+
+  // 화면 표 렌더
+  const body = $('mergeBody');
+  body.innerHTML = '';
+  let grand = 0;
+  blocks.forEach(b => {
+    grand += b.total;
+    const rows = b.items.length ? b.items : [{ 적요: '', 금액: 0 }];
+    rows.forEach((it, i) => {
+      const tr = document.createElement('tr');
+      tr.innerHTML =
+        '<td class="dept-cell">' + (i === 0 ? escapeHtml(b.dept) : '') + '</td>' +
+        '<td>' + (i === 0 ? escapeHtml(b.name) : '') + '</td>' +
+        '<td>' + escapeHtml(it.적요 || '') + '</td>' +
+        '<td class="num">' + (b.items.length ? comma(it.금액) : '0') + '</td>' +
+        '<td class="num">' + (i === 0 ? comma(b.total) : '') + '</td>';
+      body.appendChild(tr);
+    });
+  });
+  if (blocks.length) {
+    const tr = document.createElement('tr');
+    tr.className = 'total-row';
+    tr.innerHTML = '<td></td><td></td><td>전체 합계</td><td class="num">' + comma(grand) + '</td><td class="num">' + comma(grand) + '</td>';
+    body.appendChild(tr);
+  }
+  $('mergeEmpty').style.display = blocks.length ? 'none' : 'block';
+  $('btnDownload').disabled = !blocks.length;
+
+  // 엑셀용 원본 배치(부서 | 빈칸 | 사원명 | 적요 | 금액 | 합계)로 저장
+  mergedRows = [];
+  mergedRows.push([null, null, (batchYm ? Number(batchYm.split('-')[1]) : '') + '월 직원경비', null, null, null]);
+  mergedRows.push([null, null, '사원명', null, '금액', null, '적요']);
+  blocks.forEach(b => {
+    const rows = b.items.length ? b.items : [{ 적요: '', 금액: 0 }];
+    rows.forEach((it, i) => {
+      mergedRows.push([
+        i === 0 ? b.dept : null,
+        null,
+        i === 0 ? b.name : null,
+        it.적요 || '',
+        b.items.length ? it.금액 : 0,
+        i === 0 ? b.total : null
+      ]);
+    });
+  });
+  mergedRows.push([null, null, null, null, grand, grand]);
+}
+function escapeHtml(s) { return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+$('btnDownload').onclick = () => {
+  if (!mergedRows.length || typeof XLSX === 'undefined') { alert('엑셀 라이브러리를 불러오지 못했습니다. 인터넷 연결을 확인해 주십시오.'); return; }
+  const ws = XLSX.utils.aoa_to_sheet(mergedRows);
+  ws['!cols'] = [{ wch: 14 }, { wch: 3 }, { wch: 12 }, { wch: 18 }, { wch: 12 }, { wch: 12 }];
+  const wb = XLSX.utils.book_new();
+  const sheetName = (batchYm ? Number(batchYm.split('-')[1]) : '') + '월 경비';
+  XLSX.utils.book_append_sheet(wb, ws, sheetName);
+  XLSX.writeFile(wb, '경비집계_' + (batchYm || todayStr()) + '.xlsx');
+};
+
+/* ---------------- 시작 ---------------- */
+loadRoster();
+renderRoster();
+computeMerge();
+</script>
+</body>
+</html>
