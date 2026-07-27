@@ -340,8 +340,11 @@ textarea.inp{height:auto;padding:12px 13px;resize:none;line-height:1.5}
       <div class="photo-btns">
         <button class="pbtn" id="btnCamera">촬영</button>
         <button class="pbtn" id="btnAlbum">앨범</button>
-        <button class="pbtn narrow" id="btnRotate" aria-label="사진 90도 회전" hidden>↻</button>
-        <button class="pbtn narrow warn" id="btnDropPhoto" aria-label="사진 삭제" hidden>✕</button>
+      </div>
+      <div class="photo-btns" id="photoEditBtns" style="margin-top:8px" hidden>
+        <button class="pbtn" id="btnCropPhoto" type="button">사각 보정</button>
+        <button class="pbtn narrow" id="btnRotate" aria-label="사진 90도 회전">↻</button>
+        <button class="pbtn narrow warn" id="btnDropPhoto" aria-label="사진 삭제">✕</button>
       </div>
       <div class="photo-size" id="photoSize" hidden></div>
       <input type="file" id="fileCamera" accept="image/*" capture="environment" hidden>
@@ -396,6 +399,28 @@ textarea.inp{height:auto;padding:12px 13px;resize:none;line-height:1.5}
     <div class="savebar">
       <button class="save" id="fSave">저장</button>
     </div>
+  </div>
+</section>
+
+<!-- ================= 사각 보정 화면 ================= -->
+<section class="sheet" id="cropSheet" aria-hidden="true" style="z-index:45">
+  <div class="sheet-top">
+    <button class="txtbtn" id="cropCancel">취소</button>
+    <h1>사각 보정</h1>
+    <button class="txtbtn strong" id="cropApply">적용</button>
+  </div>
+  <div class="sheet-body">
+    <p class="hint" style="margin-top:0">영수증의 네 모서리에 있는 주황색 점을 손끝으로 끌어
+    실제 영수증 모서리에 맞춰 주십시오. 그대로 두면 사진 전체가 저장됩니다.</p>
+    <div id="cropStage" style="position:relative;width:100%;touch-action:none">
+      <img id="cropImg" style="width:100%;display:block;border-radius:8px" alt="보정할 영수증 사진">
+      <svg id="cropSvg" style="position:absolute;inset:0;width:100%;height:100%" preserveAspectRatio="none"></svg>
+    </div>
+    <button class="act" id="cropReset" type="button" style="margin-top:14px">모서리 초기화 (사진 전체로)</button>
+    <p class="note">
+      배경이 없는 영수증만 저장하고 싶을 때 씁니다. 저장 용량이 줄고, 나중에 글자 인식이나
+      인쇄할 때도 더 깔끔합니다. 필수 기능은 아니며, 건너뛰어도 사진은 그대로 저장됩니다.
+    </p>
   </div>
 </section>
 
@@ -637,6 +662,204 @@ async function makePhoto(source, rotate) {
   const thumb = await drawTo(bmp, CFG.thumbMaxSide, 0.65,              rotate || 0);
   if (bmp.close) bmp.close();
   return { blob: full.blob, thumb: thumb.blob, w: full.w, h: full.h, size: full.blob.size };
+}
+
+
+/* ============================================================
+   3b. 사각 보정 (배경 없이 영수증만 남기기)
+   ------------------------------------------------------------
+   자동으로 영수증 모서리를 찾아주는 방식(jscanify 등 오픈소스로 검토함)은
+   실제 영수증 사진 두 장으로 시험해 본 결과 배경과 대비가 약할 때 잘못된
+   부분을 잘라내는 경우가 많아 신뢰하기 어려웠습니다(자세한 검토 내용은
+   대화 기록 참고). 그래서 자동 인식 없이, 사용자가 네 모서리를 손으로
+   직접 맞추는 방식으로 만들었습니다.
+
+   보정 계산은 "코너 피닝(corner pinning)"이라는 잘 알려진 방법을 그대로
+   순수 Canvas2D로 구현했습니다 — 네 모서리 사각형을 삼각형 두 개로 나눠,
+   각 삼각형을 정확히 대응하는 어파인 변환으로 그려 넣는 방식입니다. 별도
+   라이브러리(OpenCV.js 등, 수 MB 이상)를 전혀 쓰지 않아 가볍고, 결과도
+   수학적으로 정확합니다.
+   ============================================================ */
+
+// 소스 삼각형 3점을 목적 삼각형 3점으로 정확히 대응시키는 2D 어파인 변환
+// 계수를 구합니다. 반환값은 CanvasRenderingContext2D.transform(a,b,c,d,e,f)
+// 에 그대로 넘길 수 있는 형태입니다. 세 점이 한 줄 위에 있으면(계산 불가)
+// null을 반환합니다.
+function solveAffine(s, dst) {
+  const [ [sx0,sy0],[sx1,sy1],[sx2,sy2] ] = s;
+  const [ [dx0,dy0],[dx1,dy1],[dx2,dy2] ] = dst;
+  const det = (sx0*(sy1-sy2) - sy0*(sx1-sx2) + (sx1*sy2 - sx2*sy1));
+  if (Math.abs(det) < 1e-9) return null;
+  function solveCol(v0, v1, v2) {
+    const A = (v0*(sy1-sy2) - sy0*(v1-v2) + (v1*sy2 - v2*sy1));
+    const C = (sx0*(v1-v2) - v0*(sx1-sx2) + (sx1*v2 - sx2*v1));
+    const E = (sx0*(sy1*v2 - sy2*v1) - sy0*(sx1*v2 - sx2*v1) + v0*(sx1*sy2 - sx2*sy1));
+    return [A/det, C/det, E/det];
+  }
+  const [a, c, e] = solveCol(dx0, dx1, dx2);
+  const [b, d, f] = solveCol(dy0, dy1, dy2);
+  return { a, b, c, d, e, f };
+}
+
+// quad = {tl,tr,bl,br} (원본 사진의 픽셀 좌표). 삼각형 두 개(TL·TR·BL /
+// TR·BR·BL)로 나눠 각각을 곧은 사각형으로 그려 넣어, 기울어지거나
+// 원근이 있는 사각형도 평평하게 폅니다. 출력 크기는 사각형 위·아래,
+// 좌·우 변 길이의 평균으로 정합니다.
+function warpQuadToRect(bitmap, quad) {
+  const { tl, tr, bl, br } = quad;
+  const topLen   = Math.hypot(tr.x - tl.x, tr.y - tl.y);
+  const botLen   = Math.hypot(br.x - bl.x, br.y - bl.y);
+  const leftLen  = Math.hypot(bl.x - tl.x, bl.y - tl.y);
+  const rightLen = Math.hypot(br.x - tr.x, br.y - tr.y);
+  const outW = Math.max(40, Math.round((topLen + botLen) / 2));
+  const outH = Math.max(40, Math.round((leftLen + rightLen) / 2));
+
+  const canvas = document.createElement('canvas');
+  canvas.width = outW;
+  canvas.height = outH;
+  const ctx = canvas.getContext('2d');
+  ctx.imageSmoothingQuality = 'high';
+
+  function warpTri(s0, s1, s2, d0, d1, d2) {
+    const m = solveAffine([[s0.x,s0.y],[s1.x,s1.y],[s2.x,s2.y]], [[d0.x,d0.y],[d1.x,d1.y],[d2.x,d2.y]]);
+    if (!m) return; // 모서리를 한 점으로 겹치게 끌어당긴 경우 등 - 그 삼각형은 건너뜁니다
+    ctx.save();
+    ctx.beginPath();
+    ctx.moveTo(d0.x, d0.y); ctx.lineTo(d1.x, d1.y); ctx.lineTo(d2.x, d2.y);
+    ctx.closePath();
+    ctx.clip();
+    ctx.transform(m.a, m.b, m.c, m.d, m.e, m.f);
+    ctx.drawImage(bitmap, 0, 0);
+    ctx.restore();
+  }
+
+  const dTL = { x: 0, y: 0 }, dTR = { x: outW, y: 0 }, dBL = { x: 0, y: outH }, dBR = { x: outW, y: outH };
+  warpTri(tl, tr, bl, dTL, dTR, dBL);
+  warpTri(tr, br, bl, dTR, dBR, dBL);
+  return canvas;
+}
+
+// ---- 사각 보정 화면 상태/조작 ----
+let cropCorners = null;         // {tl,tr,bl,br} - 원본 사진 픽셀 좌표
+let cropNatural = { w: 0, h: 0 };
+let cropObjectUrl = null;
+let cropActiveHandle = null;
+
+function resetCropCorners() {
+  const { w, h } = cropNatural;
+  cropCorners = {
+    tl: { x: 0, y: 0 }, tr: { x: w, y: 0 },
+    bl: { x: 0, y: h }, br: { x: w, y: h }
+  };
+}
+function cropSvgPoint(evt) {
+  const svg = $('cropSvg');
+  if (svg.createSVGPoint) {
+    const pt = svg.createSVGPoint();
+    pt.x = evt.clientX; pt.y = evt.clientY;
+    const p = pt.matrixTransform(svg.getScreenCTM().inverse());
+    return { x: p.x, y: p.y };
+  }
+  const rect = svg.getBoundingClientRect();
+  return {
+    x: (evt.clientX - rect.left) / rect.width * cropNatural.w,
+    y: (evt.clientY - rect.top) / rect.height * cropNatural.h
+  };
+}
+const cropClamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+function drawCropSvg() {
+  const svg = $('cropSvg');
+  const { w, h } = cropNatural;
+  svg.setAttribute('viewBox', '0 0 ' + w + ' ' + h);
+  const r = Math.max(w, h) * 0.035;
+  const order = ['tl', 'tr', 'br', 'bl']; // 폴리곤 표시용(시계 방향)
+  const pts = order.map(k => cropCorners[k].x + ',' + cropCorners[k].y).join(' ');
+  svg.innerHTML =
+    '<polygon points="' + pts + '" fill="rgba(255,140,0,0.18)" stroke="orange" stroke-width="6" vector-effect="non-scaling-stroke"></polygon>' +
+    order.map(k =>
+      '<circle data-k="' + k + '" cx="' + cropCorners[k].x + '" cy="' + cropCorners[k].y + '" r="' + r +
+      '" fill="orange" stroke="white" stroke-width="4" vector-effect="non-scaling-stroke"></circle>'
+    ).join('');
+  [...svg.querySelectorAll('circle')].forEach(c => c.addEventListener('pointerdown', onCropPointerDown));
+}
+function updateCropSvgPositions() {
+  const svg = $('cropSvg');
+  const order = ['tl', 'tr', 'br', 'bl'];
+  const poly = svg.querySelector('polygon');
+  if (poly) poly.setAttribute('points', order.map(k => cropCorners[k].x + ',' + cropCorners[k].y).join(' '));
+  svg.querySelectorAll('circle').forEach(c => {
+    const k = c.getAttribute('data-k');
+    c.setAttribute('cx', cropCorners[k].x);
+    c.setAttribute('cy', cropCorners[k].y);
+  });
+}
+function onCropPointerDown(evt) {
+  evt.preventDefault();
+  cropActiveHandle = evt.target.getAttribute('data-k');
+  try { evt.target.setPointerCapture(evt.pointerId); } catch (e) {}
+}
+function onCropPointerMove(evt) {
+  if (!cropActiveHandle) return;
+  evt.preventDefault();
+  const p = cropSvgPoint(evt);
+  cropCorners[cropActiveHandle] = {
+    x: cropClamp(p.x, 0, cropNatural.w),
+    y: cropClamp(p.y, 0, cropNatural.h)
+  };
+  updateCropSvgPositions();
+}
+function onCropPointerUp() { cropActiveHandle = null; }
+
+async function openCropSheet() {
+  const src = state.photo ? state.photo.blob
+            : (state.keepReceiptId ? (await dbGet('receipts', state.keepReceiptId)).blob : null);
+  if (!src) { toast('먼저 사진을 촬영하거나 선택해 주십시오'); return; }
+
+  const url = URL.createObjectURL(src);
+  const img = $('cropImg');
+  await new Promise((res, rej) => {
+    img.onload = res;
+    img.onerror = () => rej(new Error('사진을 열지 못했습니다'));
+    img.src = url;
+  });
+  cropObjectUrl = url;
+  cropNatural = { w: img.naturalWidth, h: img.naturalHeight };
+  resetCropCorners();
+  drawCropSvg();
+
+  pushSheet('crop');
+  $('cropSheet').classList.add('on');
+  $('cropSheet').setAttribute('aria-hidden', 'false');
+  document.body.style.overflow = 'hidden';
+}
+function closeCropSheet() {
+  $('cropSheet').classList.remove('on');
+  $('cropSheet').setAttribute('aria-hidden', 'true');
+  document.body.style.overflow = '';
+  cropActiveHandle = null;
+  if (cropObjectUrl) { URL.revokeObjectURL(cropObjectUrl); cropObjectUrl = null; }
+}
+async function applyCropCorrection() {
+  const src = state.photo ? state.photo.blob
+            : (state.keepReceiptId ? (await dbGet('receipts', state.keepReceiptId)).blob : null);
+  if (!src || !cropCorners) { closeCropSheet(); popSheet(); return; }
+
+  busy(true);
+  try {
+    const bmp = await toBitmap(src);
+    const outCanvas = warpQuadToRect(bmp, cropCorners);
+    if (bmp.close) bmp.close();
+    state.photo = await makePhoto(outCanvas, 0);
+    state.keepReceiptId = null;
+    showPhoto(state.photo.blob, state.photo.w + '×' + state.photo.h + ' · ' + bytes(state.photo.size));
+    toast('사각 보정을 적용했습니다');
+  } catch (err) {
+    console.error(err);
+    toast('보정하지 못했습니다. 사진은 원래대로 남아 있습니다');
+  }
+  busy(false);
+  closeCropSheet();
+  popSheet();
 }
 
 
@@ -936,7 +1159,7 @@ function showPhoto(blob, sizeText) {
     state.photoUrl = null;
     $('photoView').hidden = true;
     $('photoEmpty').hidden = false;
-    $('btnRotate').hidden = $('btnDropPhoto').hidden = true;
+    $('photoEditBtns').hidden = true;
     $('photoSize').hidden = true;
     return;
   }
@@ -944,7 +1167,7 @@ function showPhoto(blob, sizeText) {
   $('photoView').src = state.photoUrl;
   $('photoView').hidden = false;
   $('photoEmpty').hidden = true;
-  $('btnRotate').hidden = $('btnDropPhoto').hidden = false;
+  $('photoEditBtns').hidden = false;
   if (sizeText) { $('photoSize').textContent = sizeText; $('photoSize').hidden = false; }
 }
 
@@ -1298,6 +1521,13 @@ $('btnAlbum').onclick  = () => $('fileAlbum').click();
 $('fileCamera').onchange = e => { pickFile(e.target.files[0]); e.target.value = ''; };
 $('fileAlbum').onchange  = e => { pickFile(e.target.files[0]); e.target.value = ''; };
 $('btnDropPhoto').onclick = () => { state.photo = null; state.keepReceiptId = null; showPhoto(null); };
+$('btnCropPhoto').onclick = openCropSheet;
+$('cropCancel').onclick = () => popSheet();
+$('cropReset').onclick = () => { resetCropCorners(); updateCropSvgPositions(); };
+$('cropApply').onclick = applyCropCorrection;
+$('cropSvg').addEventListener('pointermove', onCropPointerMove);
+$('cropSvg').addEventListener('pointerup', onCropPointerUp);
+$('cropSvg').addEventListener('pointercancel', onCropPointerUp);
 $('btnOcrFill').onclick = fillFromOcr;
 $('btnOcrPhoto').onclick = runOcrOnPhoto;
 $('btnRotate').onclick = async () => {
@@ -1329,7 +1559,8 @@ $('btnWipe').onclick = wipeAll;
 
 // 안드로이드 뒤로가기 버튼으로 화면 닫기
 window.addEventListener('popstate', () => {
-  if ($('formSheet').classList.contains('on')) { state.editingId = null; closeForm(); }
+  if ($('cropSheet').classList.contains('on')) closeCropSheet();
+  else if ($('formSheet').classList.contains('on')) { state.editingId = null; closeForm(); }
   else if ($('setSheet').classList.contains('on')) closeSettings();
 });
 
