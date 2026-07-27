@@ -350,11 +350,13 @@ textarea.inp{height:auto;padding:12px 13px;resize:none;line-height:1.5}
 
     <div class="field">
       <label for="fOcrText">영수증 글자로 자동 채우기 (선택)</label>
-      <textarea class="inp" id="fOcrText" rows="3" placeholder="사진을 길게 눌러 복사한 영수증 글자를 여기에 붙여넣으세요"></textarea>
+      <textarea class="inp" id="fOcrText" rows="3" placeholder="사진을 찍은 뒤 '사진에서 자동으로 읽기'를 누르거나, 직접 글자를 붙여넣으세요"></textarea>
       <div class="photo-btns" style="margin-top:8px">
+        <button class="pbtn" id="btnOcrPhoto" type="button">사진에서 자동으로 읽기</button>
         <button class="pbtn" id="btnOcrFill" type="button">자동 채우기</button>
       </div>
-      <p class="hint">사진을 길게 눌러 "텍스트 복사"(또는 구글렌즈)로 글자를 복사해 붙여넣으면 금액·날짜·지출처를 자동으로 채워 드립니다. 채워진 내용은 꼭 확인 후 저장하십시오.</p>
+      <p class="hint">사진을 찍거나 고른 뒤 "사진에서 자동으로 읽기"를 누르면 앱이 그 자리에서 글자를 읽어 금액·날짜·지출처를 채웁니다.
+      처음 쓸 때는 인식 프로그램을 받느라 몇 초 더 걸릴 수 있습니다. 채워진 내용은 꼭 확인 후 저장하십시오.</p>
     </div>
 
     <div class="field">
@@ -483,6 +485,7 @@ textarea.inp{height:auto;padding:12px 13px;resize:none;line-height:1.5}
 <div class="busy" id="busy">처리 중입니다…</div>
 
 <script src="./config.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
 <script>
 'use strict';
 
@@ -665,6 +668,24 @@ function fillFromOcr() {
   if (r.date)   { $('fDate').value = r.date; filled.push('날짜'); }
   if (r.place)  { $('fPlace').value = r.place; filled.push('지출처'); }
   toast(filled.length ? (filled.join('·') + ' 채웠습니다. 확인 후 저장하세요') : '인식하지 못했습니다. 직접 입력해 주세요');
+}
+
+async function runOcrOnPhoto() {
+  const src = state.photo ? state.photo.blob
+            : (state.keepReceiptId ? (await dbGet('receipts', state.keepReceiptId)).blob : null);
+  if (!src) { toast('먼저 사진을 촬영하거나 선택해 주십시오'); return; }
+  if (typeof Tesseract === 'undefined') { toast('인식 프로그램을 불러오지 못했습니다. 인터넷 연결을 확인해 주십시오'); return; }
+  busy(true);
+  toast('글자를 읽는 중입니다\u2026 (처음에는 조금 더 걸릴 수 있습니다)');
+  try {
+    const { data: { text } } = await Tesseract.recognize(src, 'kor+eng');
+    $('fOcrText').value = text;
+    fillFromOcr();
+  } catch (err) {
+    console.error(err);
+    toast('글자를 읽지 못했습니다. 아래 칸에 직접 붙여넣어 보십시오');
+  }
+  busy(false);
 }
 
 
@@ -1172,6 +1193,7 @@ $('fileCamera').onchange = e => { pickFile(e.target.files[0]); e.target.value = 
 $('fileAlbum').onchange  = e => { pickFile(e.target.files[0]); e.target.value = ''; };
 $('btnDropPhoto').onclick = () => { state.photo = null; state.keepReceiptId = null; showPhoto(null); };
 $('btnOcrFill').onclick = fillFromOcr;
+$('btnOcrPhoto').onclick = runOcrOnPhoto;
 $('btnRotate').onclick = async () => {
   const src = state.photo ? state.photo.blob
             : (state.keepReceiptId ? (await dbGet('receipts', state.keepReceiptId)).blob : null);
