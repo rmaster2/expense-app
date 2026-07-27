@@ -15,11 +15,25 @@ window.APP_CONFIG = {
   appName: '경비청구',
 
   // 버전. 고칠 때마다 올려두면 설정 화면에서 확인할 수 있습니다.
-  version: '0.1.0',
+  version: '0.2.0',
 
   // 계정과목. 순서대로 화면에 나옵니다.
   // 항목을 추가하거나 이름을 바꿔도 됩니다.
   categories: ['주차비', '주유비', '식대비', '교통비', '통행비', '기타'],
+
+  // 관리부 제출 파일을 만들 때, 계정과목을 "적요" 텍스트로 바꾸는 규칙입니다.
+  // mode: 'place' - 지출처를 그대로 쓰고, 비어 있으면 fallback 사용
+  //       'fixed' - 항상 fallback 값만 사용 (지출처를 안 씀)
+  //       'desc'  - 사용 내용을 쓰고, 비어 있으면 fallback 사용
+  // 위 categories 를 고치면 이 표도 같이 맞춰 고쳐 주십시오.
+  receiptLabelRules: {
+    '주차비': { mode: 'fixed', fallback: '주차비' },
+    '주유비': { mode: 'place', fallback: '주유비' },
+    '식대비': { mode: 'place', fallback: '식대비' },
+    '교통비': { mode: 'place', fallback: '교통비' },
+    '통행비': { mode: 'fixed', fallback: '통행비' },
+    '기타':   { mode: 'desc',  fallback: '기타' }
+  },
 
   // 결제 수단
   payMethods: ['카드', '현금'],

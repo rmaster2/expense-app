@@ -426,6 +426,24 @@ textarea.inp{height:auto;padding:12px 13px;resize:none;line-height:1.5}
     </div>
 
     <div class="panel">
+      <h3>제출자 정보</h3>
+      <div class="field" style="margin-top:6px">
+        <label for="pName">이름</label>
+        <input class="inp" id="pName" type="text" placeholder="예: 홍길동" autocomplete="off">
+      </div>
+      <p class="note">관리부 제출 파일에 이 이름이 들어갑니다. 한 번만 입력하면 다음부터 기억합니다.</p>
+    </div>
+
+    <div class="panel">
+      <h3>관리부 제출</h3>
+      <button class="act" id="btnExportSubmission">이번 달 제출 파일 만들기</button>
+      <p class="note">
+        지금 보고 있는 달의 내역을 관리부 제출용 파일(JSON)로 만듭니다. 사진은 들어가지 않고
+        금액과 적요만 정리됩니다. 만들어진 파일을 메일플러그 결재에 첨부해 제출하십시오.
+      </p>
+    </div>
+
+    <div class="panel">
       <h3>백업</h3>
       <button class="act" id="btnExport">백업 파일 내려받기</button>
       <button class="act" id="btnImport">백업 파일 불러오기</button>
@@ -883,6 +901,7 @@ async function openSettings() {
   $('setSheet').setAttribute('aria-hidden', 'false');
   document.body.style.overflow = 'hidden';
   await refreshDiag();
+  await loadProfile();
 }
 function closeSettings() {
   $('setSheet').classList.remove('on');
@@ -949,6 +968,65 @@ async function requestPersist() {
   toast(ok ? '데이터 보호를 켰습니다' : '허용되지 않았습니다. 홈 화면에 추가한 뒤 다시 시도해 보십시오');
   await refreshDiag();
 }
+
+
+/* ============================================================
+   6b. 제출자 정보 + 관리부 제출 파일
+   ------------------------------------------------------------
+   관리부가 자동으로 집계할 수 있도록, 지금 보고 있는 달의 내역을
+   "계정과목 → 적요" 규칙(config.js 의 receiptLabelRules)에 따라
+   변환해서 JSON 파일로 내보냅니다. 사진은 넣지 않습니다.
+   ============================================================ */
+async function loadProfile() {
+  const p = await dbGet('meta', 'profile');
+  $('pName').value = (p && p.name) || '';
+}
+async function saveProfileName() {
+  const name = $('pName').value.trim();
+  await dbPut('meta', { k: 'profile', name });
+}
+function labelFor(entry) {
+  const rule = (CFG.receiptLabelRules && CFG.receiptLabelRules[entry.cat]) || null;
+  if (!rule) return entry.place || entry.cat;
+  if (rule.mode === 'fixed') return rule.fallback;
+  if (rule.mode === 'desc')  return entry.desc || rule.fallback;
+  return entry.place || rule.fallback; // mode === 'place' (기본값)
+}
+async function exportSubmission() {
+  const name = ($('pName').value || '').trim();
+  if (!name) { toast('이름을 먼저 입력해 주십시오'); $('pName').focus(); return; }
+  if (!state.entries.length && !confirm('이번 달 내역이 없습니다. 그래도 제출 파일을 만들까요?')) return;
+
+  await saveProfileName();
+  busy(true);
+  try {
+    const items = state.entries.map(e => ({ cat: e.cat, 적요: labelFor(e), 금액: e.amount }));
+    const total = items.reduce((s, it) => s + it.금액, 0);
+    const out = {
+      format: 'expense-submission',
+      version: 1,
+      app: CFG.version,
+      name,
+      ym: state.ym,
+      exportedAt: new Date().toISOString(),
+      items,
+      total
+    };
+    const blob = new Blob([JSON.stringify(out, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = '경비제출_' + name + '_' + state.ym + '.json';
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 4000);
+    toast('제출 파일을 만들었습니다 (' + items.length + '건)');
+  } catch (e) {
+    console.error(e);
+    toast('제출 파일을 만들지 못했습니다');
+  }
+  busy(false);
+}
+
 
 const blobToDataURL = b => new Promise(res => {
   const r = new FileReader();
@@ -1048,6 +1126,8 @@ $('fAmount').addEventListener('input', e => {
 });
 
 $('btnPersist').onclick = requestPersist;
+$('btnExportSubmission').onclick = exportSubmission;
+$('pName').addEventListener('change', saveProfileName);
 $('btnExport').onclick = exportBackup;
 $('btnImport').onclick = () => $('fileImport').click();
 $('fileImport').onchange = e => { importBackup(e.target.files[0]); e.target.value = ''; };
