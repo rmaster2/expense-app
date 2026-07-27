@@ -632,30 +632,36 @@ function parseReceiptText(text) {
   // 부가세 포함 "합계"가 따로 있어, "금액"을 먼저 보면 틀린 값이 잡힙니다.
   const amountKeywords = ['합\\s*계', '결제\\s*금액', '받을\\s*금액', '받은\\s*금액', '카드\\s*결제', '금\\s*액'];
   for (const kw of amountKeywords) {
-    const re = new RegExp(kw + '\\s*[:：]?\\s*([0-9][0-9,]*)\\s*원?', 'g');
+    // 숫자 사이에 OCR이 공백을 넣는 경우(예: "128, 000")가 있어 같은 줄 안에서는
+    // 쉼표·공백을 허용하되, 줄바꿈은 허용하지 않아 다음 항목 숫자와 붙는 사고를 막습니다.
+    const re = new RegExp(kw + '\\s*[:：]?[ \\t]*([0-9](?:[0-9,\\t ]*[0-9])?)[ \\t]*원?', 'g');
     let m, last = null;
     while ((m = re.exec(norm))) last = m;
-    if (last) { result.amount = Number(last[1].replace(/,/g, '')); break; }
+    if (last) { result.amount = Number(last[1].replace(/[,\s]/g, '')); break; }
   }
 
   // 날짜: YYYY/MM/DD, YYYY-MM-DD, YYYY.MM.DD 모두 인식
   const dm = norm.match(/(20\d{2})[\/\-.](\d{1,2})[\/\-.](\d{1,2})/);
   if (dm) result.date = dm[1] + '-' + pad2(Number(dm[2])) + '-' + pad2(Number(dm[3]));
 
-  // 지출처: "가맹점명" 라벨을 우선 사용. 없으면 전화번호(TEL) 줄
-  // 바로 앞줄을 상호명으로 봄(대부분 영수증이 상호명 다음 줄에 전화번호를
-  // 씀). 그래도 없으면 숫자/괄호로 시작하지 않는 첫 줄을 후보로 사용
-  const pm = norm.match(/가맹\s*점\s*명\s*[:：]?\s*([^\n]+)/);
+  // 지출처: "가맹점명/상호명/상호/매장명/점포명" 라벨을 우선 사용.
+  // 없으면 숫자·괄호로 시작하지 않고, 주소처럼 보이지 않는 첫 줄을 후보로
+  // 사용합니다(주소 줄을 상호명으로 잘못 채우는 사고를 막기 위함). 확실한
+  // 후보가 없으면 비워 둡니다 — 틀린 값을 자동으로 채우는 것보다, 사용자가
+  // 직접 입력하도록 비워 두는 편이 안전합니다.
+  const pm = norm.match(/(?:가맹\s*점\s*명|상\s*호\s*명|상\s*호|매\s*장\s*명|점\s*포\s*명)\s*[:：]?\s*([^\n]+)/);
   if (pm) {
     result.place = pm[1].trim();
   } else {
+    const addrLike = /[가-힣]+\s*(?:특별시|광역시|자치도|시|도|군|구|읍|면|동|로|길)\s*[0-9]/;
     const lines = norm.split(/\n/).map(s => s.trim()).filter(Boolean);
-    const telIdx = lines.findIndex(l => /TEL|전화|☎/i.test(l) || /\d{2,4}-\d{3,4}-\d{4}/.test(l));
-    if (telIdx > 0) result.place = lines[telIdx - 1].slice(0, 30);
-    else {
-      const firstLine = lines.find(l => !/^[0-9\[(]/.test(l));
-      if (firstLine) result.place = firstLine.slice(0, 30);
-    }
+    const cand = lines.find(l =>
+      !/^[0-9\[(]/.test(l) &&
+      !addrLike.test(l) &&
+      !/^(TEL|전화|☎)/i.test(l) &&
+      !/\d{2,4}-\d{3,4}-\d{4}/.test(l)
+    );
+    if (cand) result.place = cand.slice(0, 30);
   }
   return result;
 }
