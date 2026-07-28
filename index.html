@@ -412,7 +412,7 @@ textarea.inp{height:auto;padding:12px 13px;resize:none;line-height:1.5}
   <div class="sheet-body">
     <p class="hint" style="margin-top:0">영수증의 네 모서리에 있는 주황색 점을 손끝으로 끌어
     실제 영수증 모서리에 맞춰 주십시오. 그대로 두면 사진 전체가 저장됩니다.</p>
-    <div id="cropStage" style="position:relative;width:100%;touch-action:none">
+    <div id="cropStage" style="position:relative;width:100%">
       <img id="cropImg" style="width:100%;display:block;border-radius:8px" alt="보정할 영수증 사진">
       <svg id="cropSvg" style="position:absolute;inset:0;width:100%;height:100%" preserveAspectRatio="none"></svg>
     </div>
@@ -778,7 +778,7 @@ function drawCropSvg() {
     '<polygon points="' + pts + '" fill="rgba(255,140,0,0.18)" stroke="orange" stroke-width="6" vector-effect="non-scaling-stroke"></polygon>' +
     order.map(k =>
       '<circle data-k="' + k + '" cx="' + cropCorners[k].x + '" cy="' + cropCorners[k].y + '" r="' + r +
-      '" fill="orange" stroke="white" stroke-width="4" vector-effect="non-scaling-stroke"></circle>'
+      '" fill="orange" stroke="white" stroke-width="4" vector-effect="non-scaling-stroke" style="touch-action:none"></circle>'
     ).join('');
   [...svg.querySelectorAll('circle')].forEach(c => c.addEventListener('pointerdown', onCropPointerDown));
 }
@@ -842,7 +842,12 @@ function closeCropSheet() {
 async function applyCropCorrection() {
   const src = state.photo ? state.photo.blob
             : (state.keepReceiptId ? (await dbGet('receipts', state.keepReceiptId)).blob : null);
-  if (!src || !cropCorners) { closeCropSheet(); popSheet(); return; }
+  // 주의: 여기서 closeCropSheet()를 먼저 부르면 안 됩니다. popSheet() 로
+  // 발생하는 popstate 핸들러가 "cropSheet가 아직 열려 있는지" 보고 닫을
+  // 화면을 스스로 판단하므로, 화면을 먼저 지워버리면 그 아래 있던 입력
+  // 화면(formSheet)까지 같이 닫혀버리는 사고가 났습니다. popSheet()만
+  // 부르고, 실제 닫기는 popstate 핸들러에게 맡깁니다.
+  if (!src || !cropCorners) { popSheet(); return; }
 
   busy(true);
   try {
@@ -858,7 +863,9 @@ async function applyCropCorrection() {
     toast('보정하지 못했습니다. 사진은 원래대로 남아 있습니다');
   }
   busy(false);
-  closeCropSheet();
+  // closeCropSheet()를 직접 부르지 않습니다 - popSheet() 로 발생하는
+  // popstate 핸들러가 cropSheet를 보고 스스로 닫아야, 그 아래 입력
+  // 화면(formSheet)이 함께 닫히지 않습니다.
   popSheet();
 }
 
