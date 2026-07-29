@@ -526,7 +526,7 @@ textarea.inp{height:auto;padding:12px 13px;resize:none;line-height:1.5}
       </div>
       <div class="field">
         <label for="pCompany">회사명 (인쇄물에 표시)</label>
-        <input class="inp" id="pCompany" type="text" placeholder="예: 앤시정보기술(주)" autocomplete="off">
+        <input class="inp" id="pCompany" type="text" placeholder="예: ○○○(주)" autocomplete="off">
       </div>
       <p class="note">
         관리부 제출 파일과 인쇄물(PDF)에 이 정보가 들어갑니다. 한 번만 입력하면 다음부터 기억합니다.
@@ -539,7 +539,7 @@ textarea.inp{height:auto;padding:12px 13px;resize:none;line-height:1.5}
       <button class="act" id="btnPrint">이번 달 인쇄물 만들기</button>
       <p class="note">
         지출내역서(표지) · 출금전표 · 영수증 사진 · 차량운행 기록을 순서대로 이어붙여 인쇄 화면을 엽니다.
-        거기서 "PDF로 저장"을 선택하면 파일이 만들어지고, 그 파일을 메일플러그 결재에 첨부하면 됩니다.
+        거기서 "PDF로 저장"을 선택하면 파일이 만들어지고, 그 파일을 사내 전자결재에 첨부하면 됩니다.
         인쇄 대화상자가 열리지 않으면, 잠시 후 취소하고 다시 눌러 주십시오.
       </p>
     </div>
@@ -565,7 +565,7 @@ textarea.inp{height:auto;padding:12px 13px;resize:none;line-height:1.5}
       <p class="note">
         지금 보고 있는 달의 내역을 관리부 제출용 파일(JSON)로 만듭니다. 사진은 들어가지 않고
         금액과 적요만 정리됩니다. 차량운행 기록(날짜·출발지·목적지·주행거리)도 함께 담깁니다.
-        만들어진 파일을 메일플러그 결재에 첨부해 제출하십시오.
+        만들어진 파일을 사내 전자결재에 첨부해 제출하십시오.
       </p>
     </div>
 
@@ -590,8 +590,11 @@ textarea.inp{height:auto;padding:12px 13px;resize:none;line-height:1.5}
 
     <div class="panel">
       <h3>초기화</h3>
-      <button class="act danger" id="btnWipe">저장된 자료 전부 지우기</button>
-      <p class="note">지운 자료는 되돌릴 수 없습니다. 백업 파일이 있어야 복구할 수 있습니다.</p>
+      <button class="act danger" id="btnWipe">내역과 사진 전부 지우기</button>
+      <p class="note">
+        사용 내역·영수증 사진·차량운행 기록을 지웁니다. 제출자 이름·회사명과 설정은 남습니다.
+        지운 자료는 되돌릴 수 없습니다. 백업 파일이 있어야 복구할 수 있습니다.
+      </p>
     </div>
 
   </div>
@@ -721,8 +724,19 @@ function openDB() {
         db.createObjectStore('vehicleRuns', { keyPath: 'id' }).createIndex('ym', 'ym');
       }
     };
-    req.onsuccess = () => { _db = req.result; res(_db); };
+    req.onsuccess = () => {
+      _db = req.result;
+      // 다른 탭에서 이 앱을 새 버전으로 열면, 이 탭이 붙잡고 있는 연결 때문에
+      // 그쪽이 멈춥니다. 그럴 때는 이쪽 연결을 닫아 길을 비켜 줍니다.
+      _db.onversionchange = () => { try { _db.close(); } catch (e) {} _db = null; };
+      // 브라우저가 어떤 이유로 연결을 끊으면, 다음 접근 때 새로 열도록 비워 둡니다.
+      _db.onclose = () => { _db = null; };
+      res(_db);
+    };
     req.onerror = () => rej(req.error);
+    // 다른 탭이 옛 버전을 붙잡고 있어 준비가 막힌 경우입니다. 이 처리가 없으면
+    // 앱이 아무 안내도 없이 영구히 멈춰 버립니다.
+    req.onblocked = () => rej(new Error('이 앱이 다른 탭에서도 열려 있어 준비를 마치지 못했습니다. 다른 탭을 닫고 다시 열어 주십시오.'));
   });
 }
 function tx(store, mode, fn) {
@@ -928,18 +942,35 @@ function onCropPointerMove(evt) {
 }
 function onCropPointerUp() { cropActiveHandle = null; }
 
+/* 지금 입력 화면에 올라와 있는 사진을 가져옵니다. 새로 찍은 사진이 있으면 그것을,
+   없으면 저장돼 있던 사진을 씁니다. 저장된 사진이 어떤 이유로 사라진 경우에도
+   오류로 죽지 않고 그냥 "없음"으로 처리합니다(예전에는 이 부분에서 오류가 나면
+   아무 안내도 없이 조용히 멈췄습니다). */
+async function currentPhotoBlob() {
+  if (state.photo) return state.photo.blob;
+  if (!state.keepReceiptId) return null;
+  const r = await dbGet('receipts', state.keepReceiptId);
+  return (r && r.blob) ? r.blob : null;
+}
+
 async function openCropSheet() {
-  const src = state.photo ? state.photo.blob
-            : (state.keepReceiptId ? (await dbGet('receipts', state.keepReceiptId)).blob : null);
+  const src = await currentPhotoBlob();
   if (!src) { toast('먼저 사진을 촬영하거나 선택해 주십시오'); return; }
 
   const url = URL.createObjectURL(src);
   const img = $('cropImg');
-  await new Promise((res, rej) => {
-    img.onload = res;
-    img.onerror = () => rej(new Error('사진을 열지 못했습니다'));
-    img.src = url;
-  });
+  try {
+    await new Promise((res, rej) => {
+      img.onload = res;
+      img.onerror = () => rej(new Error('사진을 열지 못했습니다'));
+      img.src = url;
+    });
+  } catch (err) {
+    URL.revokeObjectURL(url);
+    console.error(err);
+    toast('사진을 열지 못했습니다');
+    return;
+  }
   cropObjectUrl = url;
   cropNatural = { w: img.naturalWidth, h: img.naturalHeight };
   resetCropCorners();
@@ -948,24 +979,26 @@ async function openCropSheet() {
   pushSheet('crop');
   $('cropSheet').classList.add('on');
   $('cropSheet').setAttribute('aria-hidden', 'false');
-  document.body.style.overflow = 'hidden';
+  syncBodyScrollLock();
 }
 function closeCropSheet() {
   $('cropSheet').classList.remove('on');
   $('cropSheet').setAttribute('aria-hidden', 'true');
-  document.body.style.overflow = '';
+  syncBodyScrollLock();
   cropActiveHandle = null;
   if (cropObjectUrl) { URL.revokeObjectURL(cropObjectUrl); cropObjectUrl = null; }
 }
 async function applyCropCorrection() {
-  const src = state.photo ? state.photo.blob
-            : (state.keepReceiptId ? (await dbGet('receipts', state.keepReceiptId)).blob : null);
+  const src = await currentPhotoBlob();
   // 주의: 여기서 closeCropSheet()를 먼저 부르면 안 됩니다. popSheet() 로
   // 발생하는 popstate 핸들러가 "cropSheet가 아직 열려 있는지" 보고 닫을
   // 화면을 스스로 판단하므로, 화면을 먼저 지워버리면 그 아래 있던 입력
   // 화면(formSheet)까지 같이 닫혀버리는 사고가 났습니다. popSheet()만
   // 부르고, 실제 닫기는 popstate 핸들러에게 맡깁니다.
-  if (!src || !cropCorners) { popSheet(); return; }
+  if (!src || !cropCorners) {
+    if ($('cropSheet').classList.contains('on')) popSheet();
+    return;
+  }
 
   busy(true);
   try {
@@ -984,7 +1017,12 @@ async function applyCropCorrection() {
   // closeCropSheet()를 직접 부르지 않습니다 - popSheet() 로 발생하는
   // popstate 핸들러가 cropSheet를 보고 스스로 닫아야, 그 아래 입력
   // 화면(formSheet)이 함께 닫히지 않습니다.
-  popSheet();
+  //
+  // 단, 보정 계산이 몇 초 걸릴 수 있어서 그 사이에 사용자가 휴대폰의
+  // 뒤로가기를 눌러 보정 화면이 이미 닫혔을 수 있습니다. 그때 여기서
+  // popSheet()를 또 부르면 그 아래 입력 화면까지 닫혀 방금 보정한
+  // 사진이 사라집니다. 그래서 아직 열려 있을 때만 닫습니다.
+  if ($('cropSheet').classList.contains('on')) popSheet();
 }
 
 
@@ -1090,10 +1128,14 @@ function warmUpPaddle() {
     await svc.initialize();
     return svc;
   })();
+  const attempted = paddleServicePromise;
   paddleServicePromise.catch(err => {
     console.warn('[PaddleOCR] 준비하지 못했습니다. 필요할 때 Tesseract로 대체합니다.', err);
+    // 실패한 결과를 계속 기억해 두면, 잠깐 인터넷이 끊겼던 경우에도 그 뒤로는
+    // 계속 Tesseract만 쓰게 됩니다. 실패했으면 비워서 다음에 다시 시도하게 합니다.
+    if (paddleServicePromise === attempted) paddleServicePromise = null;
   });
-  return paddleServicePromise;
+  return attempted;
 }
 async function recognizeWithPaddle(blob) {
   const svc = await warmUpPaddle();
@@ -1121,8 +1163,7 @@ async function recognizeWithTesseract(blob) {
 }
 
 async function runOcrOnPhoto() {
-  const src = state.photo ? state.photo.blob
-            : (state.keepReceiptId ? (await dbGet('receipts', state.keepReceiptId)).blob : null);
+  const src = await currentPhotoBlob();
   if (!src) { toast('먼저 사진을 촬영하거나 선택해 주십시오'); return; }
 
   busy(true);
@@ -1320,6 +1361,16 @@ function renderRunList() {
 function pushSheet(name) { try { history.pushState({ sheet: name }, ''); } catch (e) {} }
 function popSheet()      { try { history.back(); } catch (e) {} }
 
+/* 화면이 하나라도 열려 있으면 뒤 배경이 스크롤되지 않게 막습니다.
+   예전에는 각 화면이 직접 body 의 스크롤을 켜고 끄다 보니, 위 화면만 닫았는데
+   아래 화면이 아직 열려 있는데도 배경이 스크롤되는 문제가 있었습니다.
+   지금은 열려 있는 화면 개수를 실제로 세어서 판단합니다. */
+function syncBodyScrollLock() {
+  const anyOpen = ['formSheet', 'cropSheet', 'runSheet', 'setSheet']
+    .some(id => $(id) && $(id).classList.contains('on'));
+  document.body.style.overflow = anyOpen ? 'hidden' : '';
+}
+
 function buildChips(box, items, getSel, onPick) {
   box.innerHTML = '';
   items.forEach(v => {
@@ -1393,13 +1444,13 @@ async function openForm(id) {
   pushSheet('form');
   $('formSheet').classList.add('on');
   $('formSheet').setAttribute('aria-hidden', 'false');
-  document.body.style.overflow = 'hidden';
+  syncBodyScrollLock();
   if (!isEdit) setTimeout(() => $('fAmount').focus(), 120);
 }
 function closeForm() {
   $('formSheet').classList.remove('on');
   $('formSheet').setAttribute('aria-hidden', 'true');
-  document.body.style.overflow = '';
+  syncBodyScrollLock();
   if (state.photoUrl) { URL.revokeObjectURL(state.photoUrl); state.photoUrl = null; }
   state.photo = null;
 }
@@ -1491,10 +1542,10 @@ async function deleteEntry() {
 /* ============================================================
    5b. 차량운행 기록 화면
    ------------------------------------------------------------
-   v46(기존 PC용) 서식의 "차량운행일지"를 참고했습니다. 다만 이번
+   기존 PC용 전표 서식의 "차량운행일지"를 참고했습니다. 다만 이번
    단계에서는 그 서식 그대로의 A4 인쇄물은 만들지 않고, 입력과
    관리부 제출 파일 포함까지만 합니다. 하루에 한 건만 기록한다는
-   원칙도 v46과 같게 맞췄습니다(날짜를 그대로 저장 키로 씀).
+   원칙도 기존 서식과 같게 맞췄습니다(날짜를 그대로 저장 키로 씀).
    ============================================================ */
 async function openRunForm(id) {
   const defaultDate = state.ym === todayStr().slice(0, 7) ? todayStr() : state.ym + '-01';
@@ -1528,13 +1579,13 @@ async function openRunForm(id) {
   pushSheet('run');
   $('runSheet').classList.add('on');
   $('runSheet').setAttribute('aria-hidden', 'false');
-  document.body.style.overflow = 'hidden';
+  syncBodyScrollLock();
   if (!isEdit) setTimeout(() => $('runFrom').focus(), 120);
 }
 function closeRunForm() {
   $('runSheet').classList.remove('on');
   $('runSheet').setAttribute('aria-hidden', 'true');
-  document.body.style.overflow = '';
+  syncBodyScrollLock();
 }
 async function saveRun() {
   const date = $('runDate').value;
@@ -1542,6 +1593,16 @@ async function saveRun() {
   const to   = $('runTo').value.trim();
   const km   = Number(($('runKm').value || '').replace(/[^\d.]/g, '')) || 0;
   if (!date) { toast('날짜를 선택해 주십시오'); return; }
+
+  // 수정 중에 날짜를 바꿨는데 그 날짜에 이미 기록이 있으면, 조용히 덮어쓰지 않고
+  // 먼저 물어봅니다(예전에는 두 건이 한 건으로 줄어드는 것을 알 수 없었습니다).
+  if (state.runEditingId && state.runEditingId !== date) {
+    const clash = await dbGet('vehicleRuns', date);
+    if (clash) {
+      const label = date + ' (' + (clash.from || '') + ' → ' + (clash.to || '') + ', ' + comma(clash.km || 0) + 'km)';
+      if (!confirm(label + ' 기록이 이미 있습니다.\n이 내용으로 덮어쓰면 기존 기록은 사라집니다. 계속할까요?')) return;
+    }
+  }
 
   busy(true);
   try {
@@ -1585,7 +1646,7 @@ async function openSettings() {
   pushSheet('set');
   $('setSheet').classList.add('on');
   $('setSheet').setAttribute('aria-hidden', 'false');
-  document.body.style.overflow = 'hidden';
+  syncBodyScrollLock();
   await refreshDiag();
   await loadProfile();
   await loadVehiclePref();
@@ -1595,7 +1656,7 @@ async function openSettings() {
 function closeSettings() {
   $('setSheet').classList.remove('on');
   $('setSheet').setAttribute('aria-hidden', 'true');
-  document.body.style.overflow = '';
+  syncBodyScrollLock();
 }
 
 async function refreshDiag() {
@@ -1703,7 +1764,7 @@ async function exportSubmission() {
     const vehicleLog = state.runs.map(r => ({ date: r.date, from: r.from || '', to: r.to || '', km: r.km || 0 }));
     const totalKm = vehicleLog.reduce((s, r) => s + r.km, 0);
     if (vehiclePref.autoFuelFromKm) {
-      const rate = CFG.vehicleLog.kmRate || 250;
+      const rate = (CFG.vehicleLog && CFG.vehicleLog.kmRate) || 250;
       vehicleLog.forEach(r => {
         if (r.km > 0) {
           items.push({ cat: '주유비', 적요: '유류비(자동계산 ' + r.km + 'km×' + rate + '원, ' + r.date + ')', 금액: Math.round(r.km * rate) });
@@ -1755,7 +1816,7 @@ async function exportSubmission() {
    실제로 항상 정확하게 처리됩니다.
 
    출금전표 크기 : 계정과목별 건수가 9건 이하면 절반 크기, 9건을
-   넘으면 전체 크기로 바뀝니다(기존 v45/v46 서식이 절반 한 장에
+   넘으면 전체 크기로 바뀝니다(기존 PC용 전표 서식이 절반 한 장에
    정확히 9행이었던 것과 맞춘 기준입니다). 전체 크기 한 장에는
    20건까지 들어가고, 그보다 많으면 "부분합계"를 넣어 다음 장으로
    이어집니다. 영수증은 항상 그 계정과목의 표가 끝나는 바로 아래부터
@@ -1771,7 +1832,7 @@ function chunkArr(arr, size) {
   for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
   return out;
 }
-const PRINT_HALF_MAX = 9;   // 절반 크기 출금전표 한 장의 최대 건수 (v46 서식과 동일)
+const PRINT_HALF_MAX = 9;   // 절반 크기 출금전표 한 장의 최대 건수 (기존 서식과 동일)
 const PRINT_FULL_MAX = 20;  // 전체 크기 출금전표 한 장의 최대 건수 (절반의 약 2배)
 const PT_COLGROUP =
   '<colgroup><col style="width:5%"><col style="width:9%"><col style="width:45%">' +
@@ -1797,27 +1858,23 @@ function ptTotalRow(label, amount) {
 }
 
 async function buildReceiptMasonry(items, startNo) {
-  const withPhoto = [];
+  const parts = [];
   for (let i = 0; i < items.length; i++) {
     const e = items[i];
     if (!e.receiptId) continue;
     const r = await dbGet('receipts', e.receiptId);
     if (!r || !r.blob) continue;
-    withPhoto.push({ no: startNo + i, r });
-  }
-  if (!withPhoto.length) return '';
-  const parts = [];
-  for (const { no, r } of withPhoto) {
-    // 인쇄물은 완전히 별도의 새 창(다른 문서)에서 열리기 때문에, 이 화면에서만
-    // 쓸 수 있는 blob: 임시 주소 대신 데이터 자체를 그대로 담는 data: 주소를
-    // 씁니다. 그래야 새 창에서도 사진이 확실히 보입니다.
-    const dataUrl = await blobToDataURL(r.blob);
+    // 인쇄물이 이 화면과 같은 문서 안에 만들어지므로 blob 주소를 그대로 쓸 수
+    // 있습니다. 사진을 데이터로 바꿔 넣지 않아 문서가 훨씬 가볍습니다.
+    const url = URL.createObjectURL(r.blob);
+    pvObjectUrls.push(url);
     // 가로가 세로보다 많이 긴 사진(예: 가로로 찍힌 영수증)은 3등분하지 않고
     // 한 줄 전체를 씁니다. 그 외에는 3열 배치에 자연스럽게 섞여 들어갑니다.
     const isWide = r.w && r.h && (r.w / r.h) > 1.3;
-    parts.push('<div class="' + (isWide ? 'pv-wide' : 'pv-receipt') + '">' +
-      '<span class="pv-badge">' + no + '</span><img src="' + dataUrl + '"></div>');
+    parts.push('<div class="pv-receipt' + (isWide ? ' pv-wide' : '') + '">' +
+      '<span class="pv-badge">' + (startNo + i) + '</span><img src="' + url + '"></div>');
   }
+  if (!parts.length) return '';
   return '<div class="pv-masonry">' + parts.join('') + '</div>';
 }
 
@@ -1826,7 +1883,6 @@ async function buildCategoryBlock(cat, items, monthLabel) {
   const capacity = isHalf ? PRINT_HALF_MAX : PRINT_FULL_MAX;
   const chunks = chunkArr(items, capacity);
   const catTotal = items.reduce((s, e) => s + e.amount, 0);
-  const masonryHtml = await buildReceiptMasonry(items, 1);
 
   let html = '';
   let no = 1;
@@ -1839,33 +1895,63 @@ async function buildCategoryBlock(cat, items, monthLabel) {
       : '합&nbsp;&nbsp;계';
     const rows = ck.map((e, i) => ptRow(no + i, e)).join('');
     const pageNote = chunks.length > 1 ? ', ' + (idx + 1) + '/' + chunks.length + '장' : '';
+    // 영수증은 "그 장에 실린 항목의 영수증"만 그 표 바로 아래에 붙입니다.
+    // (전부 마지막 장 뒤로 몰리면 번호를 대조하기 불편해집니다)
+    const masonryHtml = await buildReceiptMasonry(ck, no);
     html += '<div class="pv-cat">' +
       '<div style="text-align:center;font-size:' + (isHalf ? 14 : 16) + 'pt;font-weight:700;letter-spacing:5px;margin:2mm 0">출&nbsp;&nbsp;금&nbsp;&nbsp;전&nbsp;&nbsp;표</div>' +
       '<div style="border-bottom:1.5px solid black;margin-bottom:2mm"></div>' +
       '<div style="font-size:9pt;text-align:center;margin-bottom:3mm">' + esc(monthLabel) + ' · ' + esc(cat) + ' (' + items.length + '건' + pageNote + ')</div>' +
       '<table class="pv-table">' + PT_COLGROUP + '<tbody>' + ptHeaderRow() + rows +
       ptTotalRow(label, isLastChunk ? catTotal : chunkTotal) + '</tbody></table>' +
-      (isLastChunk ? masonryHtml : '') +
+      masonryHtml +
       '</div>';
     no += ck.length;
   }
   return html;
 }
 
-async function buildCoverPage() {
+/* 이번 달 내역을 계정과목별로 묶습니다(정리합니다).
+   중요 : config.js 의 계정과목 목록에 없는 이름이 자료에 남아 있을 수 있습니다
+   (계정과목 이름을 나중에 바꾸거나 지운 경우). 그런 항목을 빠뜨리면 표지의
+   합계 금액에는 들어가는데 정작 근거가 되는 출금전표에는 없는, 대차가 맞지
+   않는 공문서가 만들어집니다. 그래서 목록에 없는 이름도 뒤에 그대로 붙여
+   반드시 전표가 만들어지도록 합니다. */
+function groupEntriesForPrint() {
+  const grouped = {};
+  const order = [];
+  CFG.categories.forEach(c => { grouped[c] = []; order.push(c); });
+  state.entries.forEach(e => {
+    const cat = e.cat || '(분류없음)';
+    if (!grouped[cat]) { grouped[cat] = []; order.push(cat); }
+    grouped[cat].push(e);
+  });
+  order.forEach(c => grouped[c].sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0)));
+  return { grouped, order };
+}
+
+async function buildCoverPage(grouped, order) {
   const catTotals = {};
-  CFG.categories.forEach(c => catTotals[c] = 0);
-  state.entries.forEach(e => { if (catTotals[e.cat] != null) catTotals[e.cat] += e.amount; });
+  order.forEach(c => catTotals[c] = grouped[c].reduce((s, e) => s + e.amount, 0));
   const grand = state.entries.reduce((s, e) => s + e.amount, 0);
+  const rowsSum = order.reduce((s, c) => s + catTotals[c], 0);
   const [y, m] = state.ym.split('-');
   const lastDay = new Date(Number(y), Number(m), 0).getDate();
   const profile = (await dbGet('meta', 'profile')) || {};
-  const rows = CFG.categories.map(c => '<tr>' +
+  const rows = order.map(c => '<tr>' +
     '<td style="text-align:center">' + esc(c) + '</td>' +
     '<td>' + Number(m) + '월 사용분 청구</td><td></td>' +
     '<td style="text-align:right">' + (catTotals[c] ? '₩ ' + comma(catTotals[c]) : '-') + '</td></tr>'
   ).join('');
-  return '<div class="pv-cover">' +
+  // 과목별 소계의 합과 전체 합계는 원래 같아야 합니다. 자료가 손상된 경우 등으로
+  // 혹시 다르면, 조용히 넘어가지 않고 인쇄물에 눈에 띄게 표시합니다.
+  // 잘못된 금액이 관리부에 그대로 제출되는 것을 막기 위한 안전장치입니다.
+  const warn = (rowsSum !== grand)
+    ? '<div class="pv-warn">확인이 필요합니다 : 과목별 소계의 합(' + comma(rowsSum) +
+      '원)과 전체 합계(' + comma(grand) + '원)가 일치하지 않습니다. ' +
+      '제출하기 전에 내역을 확인해 주십시오.</div>'
+    : '';
+  return '<div class="pv-cover">' + warn +
     '<div style="border:1px solid black;height:20mm;display:flex;align-items:center;justify-content:center;margin-bottom:5mm">' +
     '<span style="font-size:18pt;font-weight:700;letter-spacing:8px">지 출 내 역 서</span></div>' +
     '<table class="pv-st"><colgroup><col style="width:18%"><col><col style="width:15%"><col style="width:22%"></colgroup>' +
@@ -1923,13 +2009,10 @@ async function buildPrintBodyHtml() {
   const [y, m] = state.ym.split('-');
   const monthLabel = y + '년 ' + Number(m) + '월 ' + new Date(Number(y), Number(m), 0).getDate() + '일';
 
-  const grouped = {};
-  CFG.categories.forEach(c => grouped[c] = []);
-  state.entries.forEach(e => { if (grouped[e.cat]) grouped[e.cat].push(e); });
-  CFG.categories.forEach(c => grouped[c].sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0)));
+  const { grouped, order } = groupEntriesForPrint();
 
-  let html = await buildCoverPage();
-  for (const cat of CFG.categories) {
+  let html = await buildCoverPage(grouped, order);
+  for (const cat of order) {
     const items = grouped[cat];
     if (!items.length) continue;
     html += await buildCategoryBlock(cat, items, monthLabel);
@@ -1938,14 +2021,18 @@ async function buildPrintBodyHtml() {
   return html;
 }
 
-// 인쇄 전용 문서에 그대로 들어가는 스타일입니다. 이 화면(index.html)의 스타일과는
-// 완전히 분리되어 있습니다 - 아래 makePrintout 주석 참고.
+// 인쇄물 전용 스타일입니다. 인쇄 미리보기 화면으로 들어갈 때 <head>에 넣습니다.
+//
+// 영수증 배치는 처음에 다단(column-count) 방식으로 만들었는데, 크롬에서 다단이
+// 페이지를 넘어갈 때 배치가 어긋나거나 가로 사진이 한 줄을 못 차지하는 문제가
+// 알려져 있어, 인쇄에서 훨씬 예측 가능한 그리드(grid) 방식으로 바꿨습니다.
 const PRINT_DOC_STYLE =
-  'body{font-family:\'맑은 고딕\',\'Malgun Gothic\',sans-serif;color:#000;margin:0}' +
   '@page{size:A4 portrait;margin:0}' +
-  '.pv-cover{width:178mm;min-height:277mm;box-sizing:border-box;padding:10mm 16mm 0;page-break-after:always}' +
-  '.pv-cat{padding:10mm 16mm 0;page-break-before:always;box-sizing:border-box;width:210mm}' +
-  '.pv-vlog{padding:10mm 16mm 0;page-break-before:always;box-sizing:border-box;width:210mm}' +
+  '#pvRoot{font-family:\'맑은 고딕\',\'Malgun Gothic\',sans-serif;color:#000;background:#fff}' +
+  '#pvRoot *{box-sizing:border-box}' +
+  '.pv-cover{width:210mm;min-height:277mm;padding:10mm 16mm 0;page-break-after:always}' +
+  '.pv-cat{width:210mm;padding:10mm 16mm 0;page-break-before:always}' +
+  '.pv-vlog{width:210mm;padding:10mm 16mm 0;page-break-before:always}' +
   '.pv-st{width:178mm;border-collapse:collapse;font-size:9pt}' +
   '.pv-st td,.pv-st th{border:1px solid black;padding:0.5mm 2mm;height:8.5mm;vertical-align:middle}' +
   '.pv-table{width:100%;border-collapse:collapse;font-size:9pt;table-layout:fixed;page-break-inside:avoid}' +
@@ -1953,86 +2040,151 @@ const PRINT_DOC_STYLE =
   '.pv-table .dl{text-align:left;padding-left:1.5mm;white-space:normal;word-break:break-all}' +
   '.pv-badge{display:inline-flex;align-items:center;justify-content:center;width:5.5mm;height:5.5mm;' +
   'border-radius:50%;background:#333;color:#fff;font-size:7.5pt;font-weight:700;flex:0 0 auto}' +
-  '.pv-receipt{position:relative;break-inside:avoid;margin-bottom:4mm;border:1px solid #ccc}' +
+  '.pv-masonry{display:grid;grid-template-columns:repeat(3,1fr);gap:4mm;margin-top:6mm}' +
+  '.pv-receipt{position:relative;break-inside:avoid;page-break-inside:avoid;border:1px solid #ccc;align-self:start}' +
+  '.pv-wide{grid-column:1/-1}' +
   '.pv-receipt img{width:100%;display:block}' +
   '.pv-receipt .pv-badge{position:absolute;top:2mm;left:2mm}' +
-  '.pv-masonry{column-count:3;column-gap:4mm;margin-top:6mm}' +
-  '.pv-wide{column-span:all;margin-bottom:4mm}';
-
-function wrapPrintDocument(innerHtml) {
-  return '<!doctype html><html lang="ko"><head><meta charset="utf-8">' +
-    '<title>경비청구 인쇄물</title><style>' + PRINT_DOC_STYLE + '</style></head>' +
-    '<body>' + innerHtml + '</body></html>';
-}
+  '.pv-warn{border:1.5px solid #BF3A2B;background:#FBEEEC;color:#8a2418;' +
+  'padding:3mm 4mm;margin-bottom:4mm;font-size:9pt;line-height:1.6}';
 
 /* ------------------------------------------------------------
-   인쇄를 "이 화면 안의 일부만 인쇄"하는 방식으로 처음 만들었는데, 실제
-   갤럭시 휴대폰(삼성 인터넷/크롬)에서 인쇄물이 완전히 백지로 나오는 문제가
-   있었습니다. 이 화면은 사진 촬영·사각보정 등 화면이 여러 겹(사진 편집,
-   설정 등)으로 겹쳐 있어서, "다른 부분은 숨기고 이 부분만 보이게" 하는
-   방식이 일부 휴대폰에서 제대로 동작하지 않은 것으로 보입니다.
+   인쇄 방식에 대하여 (실패 두 번 끝에 정착한 방식입니다)
 
-   그래서 인쇄물을 이 화면과 완전히 분리된 새 창(빈 문서)에 통째로 새로
-   써서 그 창만 인쇄하는 방식으로 바꿨습니다. 이 방식은 이 화면에 어떤
-   내용이 열려 있든 전혀 영향을 받지 않아 더 확실합니다.
+   처음에는 "이 화면 안에서 인쇄할 부분만 남기고 나머지를 감추는" 방식
+   (@media print + display:none / visibility:hidden)으로 만들었는데, 실제
+   갤럭시 휴대폰 크롬에서 인쇄물이 두 번 모두 완전 백지(1페이지)로 나왔습니다.
+   원인으로 확인된 것은 두 가지입니다.
+     1) 설정 화면을 열면 body에 overflow:hidden 이 걸리는데, 크롬은 이 상태의
+        문서를 인쇄할 때 첫 페이지에서 잘라냅니다. 인쇄 버튼이 바로 그 설정
+        화면 안에 있으니 매번 걸렸습니다.
+     2) 이 앱의 화면들은 position:fixed 로 겹쳐 있고 내부가 스크롤 영역이라,
+        "일부만 인쇄" 기법과 근본적으로 맞지 않습니다.
 
-   새 창은 반드시 사진기(사용자가 버튼을 누른) 그 순간에 바로 열어야 합니다.
-   내용을 다 만든 뒤에 열면, 휴대폰 브라우저가 "팝업 차단"으로 막아버릴 수
-   있기 때문입니다. 그래서 아래 makePrintout()은 제일 먼저(사진을 읽어오기
-   전에) 빈 창부터 열고, 그 다음에 내용을 만들어 그 창에 채워 넣습니다.
+   그 다음에는 새 창(window.open)에 인쇄물을 써넣는 방식을 썼는데, 이것도
+   문제가 있었습니다 - 홈 화면에 설치한 앱에서는 새 창이 별도 브라우저 창으로
+   열려 내용을 써넣지 못할 수 있고, 무엇보다 사진이 다 그려지기 전에 인쇄가
+   시작되어 사진이 백지로 나올 위험이 있었습니다.
+
+   그래서 지금은 가장 확실한 방식으로 정착했습니다.
+     - 새 창을 쓰지 않고, 이 화면 자체를 인쇄물로 갈아끼웁니다(감추는 기법 없음).
+       즉 "인쇄되는 것 = 눈에 보이는 것"이라 어긋날 수가 없습니다.
+     - body 의 overflow:hidden 을 명시적으로 풀어, 1페이지 클리핑 원인을 없앱니다.
+     - 사진이 전부 실제로 그려진 것을 확인한 뒤에야 인쇄 버튼이 활성화됩니다.
+       (이전 방식의 백지 원인을 직접 제거)
+     - 사진을 base64 로 부풀리지 않고 blob 주소를 그대로 씁니다(같은 문서라
+       가능합니다). 문서 크기가 25% 이상 줄고, 거대한 문자열을 만들지 않습니다.
+     - 인쇄가 안 되는 환경을 위해 "파일로 저장" 대비책 버튼도 함께 둡니다.
    ------------------------------------------------------------ */
-function makePrintout() {
-  const printWin = window.open('', '_blank');
-  if (!printWin) {
-    toast('인쇄 창을 열지 못했습니다. 휴대폰의 팝업 차단 설정을 확인해 주십시오');
+let pvObjectUrls = [];
+
+async function makePrintout() {
+  await saveProfileName();   // 방금 입력한 이름·회사명을 먼저 저장합니다
+  const profile = (await dbGet('meta', 'profile')) || {};
+  if (!profile.name) {
+    toast('설정 화면의 "제출자 정보"에 이름을 먼저 입력해 주십시오');
+    $('pName').focus();
     return;
   }
-  printWin.document.write(
-    '<!doctype html><html lang="ko"><head><meta charset="utf-8"><title>인쇄물 준비 중</title></head>' +
-    '<body style="font-family:sans-serif;padding:40px;color:#888">인쇄물을 준비하고 있습니다…</body></html>'
-  );
-  runPrintFlow(printWin);
-}
-
-async function runPrintFlow(printWin) {
   if (!state.entries.length && !state.runs.length) {
     toast('이번 달 내역이 없습니다');
-    try { printWin.close(); } catch (e) {}
     return;
   }
-  const profile = await dbGet('meta', 'profile');
-  if (!profile || !profile.name) {
-    toast('설정 화면의 "제출자 정보"에 이름을 먼저 입력해 주십시오');
-    try { printWin.close(); } catch (e) {}
-    return;
-  }
-  busy(true);
-  try {
-    const bodyHtml = await buildPrintBodyHtml();
-    const fullHtml = wrapPrintDocument(bodyHtml);
-    busy(false);
-    if (printWin.closed) {
-      toast('인쇄 창이 닫혔습니다. 다시 시도해 주십시오');
-      return;
-    }
-    printWin.document.open();
-    printWin.document.write(fullHtml);
-    printWin.document.close();
 
-    // 인쇄는 딱 한 번만 실행되도록 합니다(아래 두 방법 중 먼저 되는 쪽으로).
-    let printed = false;
-    const doPrint = () => {
-      if (printed) return;
-      printed = true;
-      try { printWin.focus(); printWin.print(); } catch (e) {}
-    };
-    printWin.onload = () => setTimeout(doPrint, 200);
-    setTimeout(doPrint, 800); // onload가 늦거나 안 뜰 때를 대비한 보험
+  busy(true);
+  let bodyHtml;
+  try {
+    bodyHtml = await buildPrintBodyHtml();
   } catch (err) {
     busy(false);
     console.error(err);
     toast('인쇄물을 만들지 못했습니다');
-    try { printWin.close(); } catch (e) {}
+    return;
+  }
+  busy(false);
+
+  // 이 화면 전체를 인쇄물로 갈아끼웁니다. 모든 자료는 IndexedDB에 저장되어
+  // 있으므로, "돌아가기"에서 새로고침하면 원래 화면이 그대로 복구됩니다.
+  document.head.insertAdjacentHTML('beforeend',
+    '<style id="pvStyle">' + PRINT_DOC_STYLE +
+    '@media print{#pvBar{display:none!important}}</style>');
+  document.body.style.overflow = '';   // 인쇄가 1페이지에서 잘리는 원인 제거
+  document.body.innerHTML =
+    '<div id="pvBar" style="position:sticky;top:0;z-index:9;display:flex;gap:8px;' +
+      'padding:10px;background:#16181D">' +
+      '<button id="pvBack" style="flex:1;height:46px;border:none;border-radius:10px;' +
+        'background:#EEF1F6;font-size:14px;font-weight:600">돌아가기</button>' +
+      '<button id="pvGo" disabled style="flex:2;height:46px;border:none;border-radius:10px;' +
+        'background:#C3C8D1;color:#fff;font-size:15px;font-weight:600">사진 준비 중…</button>' +
+    '</div>' +
+    '<div id="pvRoot">' + bodyHtml + '</div>' +
+    '<div id="pvFallback" style="padding:16px;font-size:12.5px;color:#6B7280;line-height:1.7">' +
+      '인쇄 화면이 열리지 않거나 백지로 나오면, 아래 버튼으로 파일로 저장한 뒤 ' +
+      '컴퓨터에서 열어 인쇄(PDF로 저장)하실 수 있습니다.' +
+      '<button id="pvSaveFile" style="display:block;width:100%;height:44px;margin-top:10px;' +
+        'border:1px solid #E1E5EC;border-radius:10px;background:#fff;font-size:14px;' +
+        'font-weight:600">인쇄물을 파일로 저장하기</button>' +
+    '</div>';
+
+  // 사진이 전부 실제로 로드·그려진 뒤에만 인쇄를 허용합니다.
+  // (이전 방식에서 사진이 백지로 나오던 직접적인 원인을 제거하는 부분입니다)
+  const imgs = Array.prototype.slice.call(document.images);
+  await Promise.all(imgs.map(im => im.complete
+    ? null
+    : new Promise(r => { im.onload = r; im.onerror = r; })));
+  await Promise.all(imgs.map(im => (im.decode ? im.decode().catch(() => {}) : null)));
+  await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+
+  const go = document.getElementById('pvGo');
+  go.disabled = false;
+  go.textContent = '인쇄 / PDF로 저장';
+  go.style.background = '#16181D';
+  // 사용자가 직접 누른 그 순간에 인쇄를 부릅니다(브라우저가 가장 잘 허용하는 방식).
+  go.onclick = () => { try { window.print(); } catch (e) { toast('인쇄를 시작하지 못했습니다. 아래 "파일로 저장"을 이용해 주십시오'); } };
+
+  document.getElementById('pvBack').onclick = () => {
+    pvObjectUrls.forEach(u => URL.revokeObjectURL(u));
+    pvObjectUrls = [];
+    location.reload();
+  };
+
+  document.getElementById('pvSaveFile').onclick = () => savePrintoutAsFile(profile);
+}
+
+// 인쇄가 안 되는 환경을 위한 대비책 : 같은 인쇄물을 파일 하나로 저장합니다.
+// 이 파일은 다른 문서가 되므로 blob 주소가 통하지 않아, 사진을 데이터 자체로
+// 바꿔 넣습니다(그래서 파일이 조금 커집니다).
+async function savePrintoutAsFile(profile) {
+  busy(true);
+  try {
+    const imgs = Array.prototype.slice.call(document.querySelectorAll('#pvRoot img'));
+    const originals = imgs.map(im => im.getAttribute('src'));
+    for (const im of imgs) {
+      const src = im.getAttribute('src');
+      if (src && src.indexOf('blob:') === 0) {
+        const blob = await (await fetch(src)).blob();
+        im.setAttribute('src', await blobToDataURL(blob));
+      }
+    }
+    const inner = document.getElementById('pvRoot').outerHTML;
+    imgs.forEach((im, i) => im.setAttribute('src', originals[i]));
+
+    const html = '<!doctype html><html lang="ko"><head><meta charset="utf-8">' +
+      '<title>경비청구 인쇄물 ' + state.ym + '</title>' +
+      '<style>body{margin:0}' + PRINT_DOC_STYLE + '</style></head><body>' + inner + '</body></html>';
+    const blob = new Blob([html], { type: 'text/html' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = '경비청구인쇄물_' + (profile.name || '') + '_' + state.ym + '.html';
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 8000);
+    busy(false);
+    toast('파일로 저장했습니다 (' + bytes(blob.size) + ')');
+  } catch (err) {
+    busy(false);
+    console.error(err);
+    toast('파일로 저장하지 못했습니다');
   }
 }
 
@@ -2050,9 +2202,19 @@ async function exportBackup() {
     const entries = await dbAll('entries');
     const receipts = await dbAll('receipts');
     const vehicleRuns = await dbAll('vehicleRuns');
-    const out = { format: 'expense-backup', version: 1, app: CFG.version, exportedAt: new Date().toISOString(), entries, vehicleRuns, receipts: [] };
+    // meta 도 함께 담습니다. 여기에 제출자 이름·회사명(profile)과 유류비 자동계산
+    // 설정(vehiclePref)이 들어 있어서, 빠뜨리면 휴대폰을 바꿔 복원한 뒤 인쇄물
+    // 만들기가 곧바로 실패합니다. 사용 기록(usage)은 그 휴대폰의 기록이므로 제외합니다.
+    const meta = (await dbAll('meta')).filter(x => x.k !== 'usage');
+    const out = { format: 'expense-backup', version: 2, app: CFG.version, exportedAt: new Date().toISOString(), entries, vehicleRuns, meta, receipts: [] };
     for (const r of receipts) {
-      out.receipts.push({ id: r.id, w: r.w, h: r.h, size: r.size, createdAt: r.createdAt, data: await blobToDataURL(r.blob) });
+      // 작은 미리보기(thumb)도 함께 담습니다. 예전에는 복원할 때 사진마다
+      // 다시 만들었는데, 사진이 많으면 매우 느리고 실패 위험도 있었습니다.
+      out.receipts.push({
+        id: r.id, w: r.w, h: r.h, size: r.size, createdAt: r.createdAt,
+        data: await blobToDataURL(r.blob),
+        thumbData: r.thumb ? await blobToDataURL(r.thumb) : null
+      });
     }
     const blob = new Blob([JSON.stringify(out)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
@@ -2075,11 +2237,19 @@ async function importBackup(file) {
     if (data.format !== 'expense-backup') throw new Error('형식이 다릅니다');
     for (const r of (data.receipts || [])) {
       const blob = await dataURLToBlob(r.data);
-      const thumb = (await makePhoto(blob, 0)).thumb;   // 작은 미리보기는 다시 생성
+      // 백업에 미리보기가 담겨 있으면 그대로 쓰고(빠름), 예전 백업이라 없으면
+      // 그때만 다시 만듭니다.
+      const thumb = r.thumbData ? await dataURLToBlob(r.thumbData) : (await makePhoto(blob, 0)).thumb;
       await dbPut('receipts', { id: r.id, blob, thumb, w: r.w, h: r.h, size: r.size || blob.size, createdAt: r.createdAt });
     }
     for (const e of (data.entries || [])) await dbPut('entries', e);
     for (const r of (data.vehicleRuns || [])) await dbPut('vehicleRuns', r);
+    for (const x of (data.meta || [])) {
+      if (x && x.k && x.k !== 'usage') await dbPut('meta', x);
+    }
+    await loadVehiclePref();
+    updateFuelToggleUI();
+    await loadProfile();
     await loadMonth();
     await refreshDiag();
     toast('불러왔습니다 (' + (data.entries || []).length + '건)');
@@ -2088,14 +2258,14 @@ async function importBackup(file) {
 }
 
 async function wipeAll() {
-  if (!confirm('저장된 자료를 전부 지웁니다. 되돌릴 수 없습니다. 계속할까요?')) return;
+  if (!confirm('사용 내역·영수증 사진·차량운행 기록을 전부 지웁니다. 되돌릴 수 없습니다. 계속할까요?\n\n(제출자 이름·회사명과 설정은 그대로 남습니다)')) return;
   if (!confirm('정말 지우시겠습니까? 백업 파일이 없으면 복구할 수 없습니다.')) return;
   await dbClear('entries');
   await dbClear('receipts');
   await dbClear('vehicleRuns');
   await loadMonth();
   await refreshDiag();
-  toast('전부 지웠습니다');
+  toast('내역과 사진을 전부 지웠습니다');
 }
 
 
@@ -2134,9 +2304,8 @@ $('cropSvg').addEventListener('pointercancel', onCropPointerUp);
 $('btnOcrFill').onclick = fillFromOcr;
 $('btnOcrPhoto').onclick = runOcrOnPhoto;
 $('btnRotate').onclick = async () => {
-  const src = state.photo ? state.photo.blob
-            : (state.keepReceiptId ? (await dbGet('receipts', state.keepReceiptId)).blob : null);
-  if (!src) return;
+  const src = await currentPhotoBlob();
+  if (!src) { toast('사진을 찾지 못했습니다'); return; }
   busy(true);
   try {
     state.photo = await makePhoto(src, 90);

@@ -1,8 +1,9 @@
 /* 오프라인에서도 화면이 열리게 해주는 파일입니다.
-   프로그램을 고쳐서 올릴 때마다 아래 CACHE 뒤의 숫자를 하나씩 올려 주십시오.
-   그래야 휴대폰이 옛날 화면을 계속 보여주지 않습니다.            */
+   아래 CACHE 값은 config.js 의 version 과 똑같이 맞춰 주십시오.
+   (예: version 이 '0.9.3' 이면 아래도 'expense-0.9.3')
+   그래야 휴대폰이 옛날 화면을 계속 보여주지 않고, 두 값이 어긋날 일도 없습니다. */
 
-const CACHE = 'expense-v15';
+const CACHE = 'expense-0.9.3';
 const FILES = ['./', './index.html', './config.js', './manifest.json', './icon-192.png', './icon-512.png'];
 
 self.addEventListener('install', e => {
