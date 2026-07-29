@@ -115,6 +115,12 @@ button{cursor:pointer;border:none;background:none;padding:0}
   margin:26px 2px 8px;
 }
 .listhead h2{font-size:13px;font-weight:600;color:var(--muted);margin:0;letter-spacing:.03em}
+.addsmall{
+  height:30px;padding:0 13px;border-radius:20px;
+  background:var(--ink);color:#fff;font-size:12.5px;font-weight:600;
+}
+.addsmall:active{opacity:.85}
+.runmeta{font-size:12.5px;color:var(--muted);margin:-2px 2px 10px}
 
 .item{
   display:flex;gap:12px;align-items:flex-start;
@@ -288,6 +294,43 @@ textarea.inp{height:auto;padding:12px 13px;resize:none;line-height:1.5}
 @media (prefers-reduced-motion:reduce){
   *{transition:none!important;animation:none!important}
 }
+
+/* ---------- 인쇄물(PDF) ----------
+   화면에는 보이지 않다가, "인쇄물 만들기"를 누르면 이 안에 내용을 채우고
+   브라우저 인쇄(= 휴대폰에서는 "PDF로 저장")를 띄웁니다. 별도 유료 프로그램이나
+   라이브러리 없이, 브라우저가 원래 가진 인쇄 기능만 그대로 씁니다.
+   페이지를 미리 딱딱 잘라 만들지 않고, 문서를 죽 이어 쓰듯 만든 뒤
+   page-break 규칙으로 "여기서는 새 장으로" 정도만 지정합니다 - 그래야
+   영수증처럼 세로 길이가 제각각인 내용도 브라우저가 알아서 다음 장으로
+   자연스럽게 넘겨줍니다(억지로 계산해서 자르지 않아도 됩니다). */
+#printArea{display:none}
+@media print{
+  body > *:not(#printArea){display:none!important}
+  #printArea{display:block!important}
+  @page{size:A4 portrait;margin:0}
+}
+#printArea{font-family:'맑은 고딕','Malgun Gothic',sans-serif;color:#000}
+.pv-cover{
+  width:178mm;min-height:277mm;box-sizing:border-box;
+  padding:10mm 16mm 0;page-break-after:always;
+}
+.pv-cat{padding:10mm 16mm 0;page-break-before:always;box-sizing:border-box;width:210mm}
+.pv-vlog{padding:10mm 16mm 0;page-break-before:always;box-sizing:border-box;width:210mm}
+.pv-st{width:178mm;border-collapse:collapse;font-size:9pt}
+.pv-st td,.pv-st th{border:1px solid black;padding:0.5mm 2mm;height:8.5mm;vertical-align:middle}
+.pv-table{width:100%;border-collapse:collapse;font-size:9pt;table-layout:fixed;page-break-inside:avoid}
+.pv-table td,.pv-table th{border:1px solid black;padding:0.8mm 1mm;text-align:center;vertical-align:middle;overflow:hidden}
+.pv-table .dl{text-align:left;padding-left:1.5mm;white-space:normal;word-break:break-all}
+.pv-badge{
+  display:inline-flex;align-items:center;justify-content:center;
+  width:5.5mm;height:5.5mm;border-radius:50%;background:#333;color:#fff;
+  font-size:7.5pt;font-weight:700;flex:0 0 auto;
+}
+.pv-receipt{position:relative;break-inside:avoid;margin-bottom:4mm;border:1px solid #ccc}
+.pv-receipt img{width:100%;display:block}
+.pv-receipt .pv-badge{position:absolute;top:2mm;left:2mm}
+.pv-masonry{column-count:3;column-gap:4mm;margin-top:6mm}
+.pv-wide{column-span:all;margin-bottom:4mm}
 </style>
 </head>
 <body>
@@ -315,6 +358,13 @@ textarea.inp{height:auto;padding:12px 13px;resize:none;line-height:1.5}
 
   <div class="listhead"><h2 id="listTitle">사용 내역</h2></div>
   <div id="list"></div>
+
+  <div class="listhead">
+    <h2>차량운행 기록</h2>
+    <button class="addsmall" id="addRunBtn" type="button">+ 추가</button>
+  </div>
+  <div class="runmeta" id="runMeta"></div>
+  <div id="runList"></div>
 </main>
 
 <div class="fabbar">
@@ -424,6 +474,45 @@ textarea.inp{height:auto;padding:12px 13px;resize:none;line-height:1.5}
   </div>
 </section>
 
+<!-- ================= 차량운행 기록 화면 ================= -->
+<section class="sheet" id="runSheet" aria-hidden="true">
+  <div class="sheet-top">
+    <button class="txtbtn" id="runCancel">취소</button>
+    <h1 id="runTitle">운행 기록 추가</h1>
+    <button class="txtbtn strong" id="runSaveTop">저장</button>
+  </div>
+  <div class="sheet-body">
+
+    <div class="field">
+      <label for="runDate">날짜</label>
+      <input class="inp" id="runDate" type="date">
+      <p class="hint">하루에 한 건만 기록됩니다. 같은 날짜로 다시 저장하면 내용이 바뀝니다.</p>
+    </div>
+
+    <div class="field">
+      <label for="runFrom">출발지</label>
+      <input class="inp" id="runFrom" type="text" placeholder="예: 회사" autocomplete="off">
+    </div>
+
+    <div class="field">
+      <label for="runTo">목적지</label>
+      <input class="inp" id="runTo" type="text" placeholder="예: 거래처 방문" autocomplete="off">
+    </div>
+
+    <div class="field">
+      <label for="runKm">주행거리 (km)</label>
+      <input class="inp amount" id="runKm" type="text" inputmode="decimal" placeholder="0" autocomplete="off">
+      <p class="hint" id="runFuelHint"></p>
+    </div>
+
+    <button class="del" id="runDelete" hidden>이 기록 삭제</button>
+
+    <div class="savebar">
+      <button class="save" id="runSave">저장</button>
+    </div>
+  </div>
+</section>
+
 <!-- ================= 설정 화면 ================= -->
 <section class="sheet" id="setSheet" aria-hidden="true">
   <div class="sheet-top">
@@ -451,6 +540,7 @@ textarea.inp{height:auto;padding:12px 13px;resize:none;line-height:1.5}
       <div class="row"><span class="k">영수증 사진</span><span class="v mono" id="dReceipts">—</span></div>
       <div class="row"><span class="k">사진 총 용량</span><span class="v mono" id="dImgSize">—</span></div>
       <div class="row"><span class="k">사진 1장 평균</span><span class="v mono" id="dImgAvg">—</span></div>
+      <div class="row"><span class="k">차량운행 기록</span><span class="v mono" id="dRuns">—</span></div>
     </div>
 
     <div class="panel">
@@ -467,7 +557,39 @@ textarea.inp{height:auto;padding:12px 13px;resize:none;line-height:1.5}
         <label for="pName">이름</label>
         <input class="inp" id="pName" type="text" placeholder="예: 홍길동" autocomplete="off">
       </div>
-      <p class="note">관리부 제출 파일에 이 이름이 들어갑니다. 한 번만 입력하면 다음부터 기억합니다.</p>
+      <div class="field">
+        <label for="pCompany">회사명 (인쇄물에 표시)</label>
+        <input class="inp" id="pCompany" type="text" placeholder="예: 앤시정보기술(주)" autocomplete="off">
+      </div>
+      <p class="note">
+        관리부 제출 파일과 인쇄물(PDF)에 이 정보가 들어갑니다. 한 번만 입력하면 다음부터 기억합니다.
+        회사명은 이 휴대폰에만 저장되며(공개 프로그램 코드에는 들어가지 않습니다), 인쇄물을 만들 때만 사용됩니다.
+      </p>
+    </div>
+
+    <div class="panel">
+      <h3>인쇄물(PDF) 만들기</h3>
+      <button class="act" id="btnPrint">이번 달 인쇄물 만들기</button>
+      <p class="note">
+        지출내역서(표지) · 출금전표 · 영수증 사진 · 차량운행 기록을 순서대로 이어붙여 인쇄 화면을 엽니다.
+        거기서 "PDF로 저장"을 선택하면 파일이 만들어지고, 그 파일을 메일플러그 결재에 첨부하면 됩니다.
+        인쇄 대화상자가 열리지 않으면, 잠시 후 취소하고 다시 눌러 주십시오.
+      </p>
+    </div>
+
+    <div class="panel">
+      <h3>차량운행 기록 설정</h3>
+      <div class="row">
+        <span class="k">주행거리로 유류비 자동계산</span>
+        <span class="v" id="fuelToggleState">꺼짐</span>
+      </div>
+      <button class="act" id="btnFuelToggle">자동계산 켜기</button>
+      <p class="note">
+        켜면, 관리부 제출 파일을 만들 때 "주행거리 × km당 단가(현재 <span id="fuelRateNote">250</span>원)"를
+        유류비로 자동 계산해 제출 금액에 더합니다. 이 경우 같은 날짜의 주유비 영수증은 따로 입력하지
+        않아야 금액이 두 번 잡히지 않습니다. 필요 없으면 꺼두시면 되고, 끈 상태에서는 차량운행 기록이
+        금액에 전혀 영향을 주지 않습니다. <b>이 설정은 이 휴대폰(사람)에만 적용됩니다.</b>
+      </p>
     </div>
 
     <div class="panel">
@@ -475,7 +597,8 @@ textarea.inp{height:auto;padding:12px 13px;resize:none;line-height:1.5}
       <button class="act" id="btnExportSubmission">이번 달 제출 파일 만들기</button>
       <p class="note">
         지금 보고 있는 달의 내역을 관리부 제출용 파일(JSON)로 만듭니다. 사진은 들어가지 않고
-        금액과 적요만 정리됩니다. 만들어진 파일을 메일플러그 결재에 첨부해 제출하십시오.
+        금액과 적요만 정리됩니다. 차량운행 기록(날짜·출발지·목적지·주행거리)도 함께 담깁니다.
+        만들어진 파일을 메일플러그 결재에 첨부해 제출하십시오.
       </p>
     </div>
 
@@ -509,6 +632,7 @@ textarea.inp{height:auto;padding:12px 13px;resize:none;line-height:1.5}
 
 <div class="toast" id="toast"></div>
 <div class="busy" id="busy">처리 중입니다…</div>
+<div id="printArea"></div>
 
 <script src="./config.js"></script>
 <script type="importmap">
@@ -546,13 +670,16 @@ const $ = id => document.getElementById(id);
 const state = {
   ym: null,          // 보고 있는 달 'YYYY-MM'
   entries: [],       // 이번 달 내역
+  runs: [],          // 이번 달 차량운행 기록
+  runEditingId: null, // 수정 중인 운행 기록의 id(=날짜)
   editingId: null,   // 수정 중인 내역 번호
   photo: null,       // 저장 대기 중인 사진 {blob, thumb, w, h, size}
   photoUrl: null,    // 화면에 띄운 사진 주소
   keepReceiptId: null,
   cat: CFG.categories[0],
   pay: CFG.payMethods[0],
-  urls: []           // 목록에서 만든 임시 사진 주소 (정리용)
+  urls: [],          // 목록에서 만든 임시 사진 주소 (정리용)
+  printUrls: []      // 인쇄물 화면에서 만든 임시 사진 주소 (정리용)
 };
 
 const pad2 = n => String(n).padStart(2, '0');
@@ -580,11 +707,32 @@ function toast(msg) {
 const busy = on => $('busy').classList.toggle('on', on);
 let lastOcrEngine = '—';   // 설정 화면에 표시할 최근 인식 엔진 이름
 
+// 차량운행 기록 - "주행거리로 유류비 자동계산" 여부는 사람마다 필요가 달라
+// config.js(공용 파일)가 아니라 이 휴대폰에만 저장합니다(meta 저장소, 'vehiclePref' 키).
+let vehiclePref = { autoFuelFromKm: false };
+async function loadVehiclePref() {
+  const p = await dbGet('meta', 'vehiclePref');
+  vehiclePref = { autoFuelFromKm: !!(p && p.autoFuelFromKm) };
+}
+function updateFuelToggleUI() {
+  const on = vehiclePref.autoFuelFromKm;
+  $('fuelToggleState').textContent = on ? '켜짐' : '꺼짐';
+  $('fuelToggleState').className = 'v' + (on ? ' good' : '');
+  $('btnFuelToggle').textContent = on ? '자동계산 끄기' : '자동계산 켜기';
+}
+async function toggleFuelPref() {
+  vehiclePref.autoFuelFromKm = !vehiclePref.autoFuelFromKm;
+  await dbPut('meta', { k: 'vehiclePref', autoFuelFromKm: vehiclePref.autoFuelFromKm });
+  updateFuelToggleUI();
+  await render(); // 메인 화면의 차량운행 요약 줄(자동계산 유류비 표시)도 바로 반영
+  toast(vehiclePref.autoFuelFromKm ? '자동계산을 켰습니다' : '자동계산을 껐습니다');
+}
+
 
 /* ============================================================
    2. 저장소 (IndexedDB)
    ============================================================ */
-const DB_NAME = 'expense_db', DB_VER = 1;
+const DB_NAME = 'expense_db', DB_VER = 2;
 let _db = null;
 
 function openDB() {
@@ -601,6 +749,11 @@ function openDB() {
       }
       if (!db.objectStoreNames.contains('meta')) {
         db.createObjectStore('meta', { keyPath: 'k' });
+      }
+      // v2에서 추가 : 차량운행 기록. 날짜(YYYY-MM-DD)를 그대로 id로 써서
+      // "하루에 한 건" 규칙을 자연스럽게 지킵니다(같은 날짜로 저장하면 덮어씀).
+      if (!db.objectStoreNames.contains('vehicleRuns')) {
+        db.createObjectStore('vehicleRuns', { keyPath: 'id' }).createIndex('ym', 'ym');
       }
     };
     req.onsuccess = () => { _db = req.result; res(_db); };
@@ -1050,6 +1203,10 @@ async function loadMonth() {
   state.entries = all
     .filter(e => e.ym === state.ym)
     .sort((a, b) => (a.date === b.date ? a.createdAt - b.createdAt : a.date < b.date ? -1 : 1));
+  const allRuns = await dbAll('vehicleRuns');
+  state.runs = allRuns
+    .filter(r => r.ym === state.ym)
+    .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
   await render();
 }
 
@@ -1075,6 +1232,8 @@ async function render() {
     cell.querySelector('.v').textContent = v ? comma(v) : '–';
     strip.appendChild(cell);
   });
+
+  renderRunList();
 
   // 내역 목록
   clearUrls();
@@ -1143,6 +1302,48 @@ async function render() {
     btn.append(thumbEl, body, amt);
     btn.addEventListener('click', () => openForm(e.id));
     list.appendChild(btn);
+  }
+}
+
+function renderRunList() {
+  const box = $('runList');
+  box.innerHTML = '';
+
+  const totalKm = state.runs.reduce((s, r) => s + (r.km || 0), 0);
+  const rate = (CFG.vehicleLog && CFG.vehicleLog.kmRate) || 250;
+  $('runMeta').textContent = state.runs.length
+    ? state.runs.length + '건 · 총 ' + comma(totalKm) + 'km' +
+      (vehiclePref.autoFuelFromKm ? ' · 자동계산 유류비 약 ' + comma(Math.round(totalKm * rate)) + '원' : '')
+    : '이번 달 기록이 없습니다';
+
+  if (!state.runs.length) return;
+
+  for (const r of state.runs) {
+    const btn = document.createElement('button');
+    btn.className = 'item';
+    btn.type = 'button';
+
+    const icon = document.createElement('div');
+    icon.className = 'thumb none';
+    icon.textContent = '🚗';
+
+    const body = document.createElement('div');
+    body.className = 'item-body';
+    const dd = r.date.slice(5).replace('-', '.');
+    body.innerHTML =
+      '<div class="item-top"><span class="item-date num"></span></div>' +
+      '<div class="item-place"></div>';
+    body.querySelector('.item-date').textContent = dd;
+    body.querySelector('.item-place').textContent =
+      (r.from || '(출발지 없음)') + ' → ' + (r.to || '(목적지 없음)');
+
+    const amt = document.createElement('div');
+    amt.className = 'item-amt num';
+    amt.textContent = comma(r.km || 0) + 'km';
+
+    btn.append(icon, body, amt);
+    btn.addEventListener('click', () => openRunForm(r.id));
+    box.appendChild(btn);
   }
 }
 
@@ -1323,6 +1524,96 @@ async function deleteEntry() {
 
 
 /* ============================================================
+   5b. 차량운행 기록 화면
+   ------------------------------------------------------------
+   v46(기존 PC용) 서식의 "차량운행일지"를 참고했습니다. 다만 이번
+   단계에서는 그 서식 그대로의 A4 인쇄물은 만들지 않고, 입력과
+   관리부 제출 파일 포함까지만 합니다. 하루에 한 건만 기록한다는
+   원칙도 v46과 같게 맞췄습니다(날짜를 그대로 저장 키로 씀).
+   ============================================================ */
+async function openRunForm(id) {
+  const defaultDate = state.ym === todayStr().slice(0, 7) ? todayStr() : state.ym + '-01';
+  // "+ 추가"로 열었어도(id 없음), 그날 날짜에 이미 기록이 있으면 새로 만들지 않고
+  // 그 기록을 불러와 수정하게 합니다 - 그래야 모르고 저장했다가 기존 기록을
+  // 덮어써 버리는 사고를 막을 수 있습니다.
+  let effectiveId = id || null;
+  if (!effectiveId) {
+    const existing = await dbGet('vehicleRuns', defaultDate);
+    if (existing) effectiveId = defaultDate;
+  }
+  state.runEditingId = effectiveId;
+  const isEdit = !!effectiveId;
+  $('runTitle').textContent = isEdit ? '운행 기록 수정' : '운행 기록 추가';
+  $('runDelete').hidden = !isEdit;
+
+  let r = null;
+  if (isEdit) r = await dbGet('vehicleRuns', effectiveId);
+
+  $('runDate').value = r ? r.date : defaultDate;
+  $('runFrom').value = r ? (r.from || '') : '';
+  $('runTo').value   = r ? (r.to || '') : '';
+  $('runKm').value   = r ? String(r.km || '') : '';
+
+  const rate = (CFG.vehicleLog && CFG.vehicleLog.kmRate) || 250;
+  $('runFuelHint').textContent = vehiclePref.autoFuelFromKm
+    ? '이 km 값은 저장 시 km당 ' + comma(rate) + '원으로 계산되어 관리부 제출 파일에 자동으로 들어갑니다.'
+    : '지금 설정(이 휴대폰)에서는 이 기록의 금액이 자동 계산되지 않습니다(참고용 기록). ' +
+      '설정 화면의 "차량운행 기록 설정"에서 켤 수 있습니다.';
+
+  pushSheet('run');
+  $('runSheet').classList.add('on');
+  $('runSheet').setAttribute('aria-hidden', 'false');
+  document.body.style.overflow = 'hidden';
+  if (!isEdit) setTimeout(() => $('runFrom').focus(), 120);
+}
+function closeRunForm() {
+  $('runSheet').classList.remove('on');
+  $('runSheet').setAttribute('aria-hidden', 'true');
+  document.body.style.overflow = '';
+}
+async function saveRun() {
+  const date = $('runDate').value;
+  const from = $('runFrom').value.trim();
+  const to   = $('runTo').value.trim();
+  const km   = Number(($('runKm').value || '').replace(/[^\d.]/g, '')) || 0;
+  if (!date) { toast('날짜를 선택해 주십시오'); return; }
+
+  busy(true);
+  try {
+    // 날짜를 그대로 id로 씁니다 - 같은 날짜로 저장하면 하루 한 건 규칙에 따라 덮어씁니다.
+    // (수정 중이던 기록의 날짜를 다른 날짜로 바꾼 경우, 예전 id는 따로 지워 중복을 남기지 않습니다.)
+    if (state.runEditingId && state.runEditingId !== date) {
+      await dbDel('vehicleRuns', state.runEditingId);
+    }
+    await dbPut('vehicleRuns', {
+      id: date, ym: date.slice(0, 7), date, from, to, km,
+      updatedAt: Date.now()
+    });
+    state.ym = date.slice(0, 7);
+    closeRunForm();
+    popSheet();
+    await loadMonth();
+    toast(state.runEditingId ? '수정했습니다' : '저장했습니다');
+    state.runEditingId = null;
+  } catch (err) {
+    console.error(err);
+    toast('저장하지 못했습니다');
+  }
+  busy(false);
+}
+async function deleteRun() {
+  if (!state.runEditingId) return;
+  if (!confirm('이 운행 기록을 삭제합니다. 되돌릴 수 없습니다.')) return;
+  await dbDel('vehicleRuns', state.runEditingId);
+  state.runEditingId = null;
+  closeRunForm();
+  popSheet();
+  await loadMonth();
+  toast('삭제했습니다');
+}
+
+
+/* ============================================================
    6. 설정 · 점검 화면
    ============================================================ */
 async function openSettings() {
@@ -1332,6 +1623,9 @@ async function openSettings() {
   document.body.style.overflow = 'hidden';
   await refreshDiag();
   await loadProfile();
+  await loadVehiclePref();
+  updateFuelToggleUI();
+  $('fuelRateNote').textContent = comma((CFG.vehicleLog && CFG.vehicleLog.kmRate) || 250);
 }
 function closeSettings() {
   $('setSheet').classList.remove('on');
@@ -1366,6 +1660,8 @@ async function refreshDiag() {
   $('dReceipts').textContent = receipts.length + '장';
   $('dImgSize').textContent = bytes(totalImg);
   $('dImgAvg').textContent = receipts.length ? bytes(Math.round(totalImg / receipts.length)) : '—';
+  const runs = await dbAll('vehicleRuns');
+  $('dRuns').textContent = runs.length + '건';
 
   // 사용 기록
   const meta = await dbGet('meta', 'usage');
@@ -1411,10 +1707,12 @@ async function requestPersist() {
 async function loadProfile() {
   const p = await dbGet('meta', 'profile');
   $('pName').value = (p && p.name) || '';
+  $('pCompany').value = (p && p.company) || '';
 }
 async function saveProfileName() {
   const name = $('pName').value.trim();
-  await dbPut('meta', { k: 'profile', name });
+  const company = $('pCompany').value.trim();
+  await dbPut('meta', { k: 'profile', name, company });
 }
 function labelFor(entry) {
   const rule = (CFG.receiptLabelRules && CFG.receiptLabelRules[entry.cat]) || null;
@@ -1432,6 +1730,22 @@ async function exportSubmission() {
   busy(true);
   try {
     const items = state.entries.map(e => ({ cat: e.cat, 적요: labelFor(e), 금액: e.amount }));
+
+    // 차량운행 기록 (날짜·출발지·목적지·주행거리). "주행거리로 유류비 자동계산"을
+    // 설정(이 휴대폰) 화면에서 켜 두었으면(vehiclePref.autoFuelFromKm), 그날의
+    // 유류비 항목을 자동으로 하나 더 만들어 items 에 더합니다 - 이 경우 같은
+    // 날짜의 주유비 영수증은 따로 입력하지 않아야 이중 계산이 되지 않습니다.
+    const vehicleLog = state.runs.map(r => ({ date: r.date, from: r.from || '', to: r.to || '', km: r.km || 0 }));
+    const totalKm = vehicleLog.reduce((s, r) => s + r.km, 0);
+    if (vehiclePref.autoFuelFromKm) {
+      const rate = CFG.vehicleLog.kmRate || 250;
+      vehicleLog.forEach(r => {
+        if (r.km > 0) {
+          items.push({ cat: '주유비', 적요: '유류비(자동계산 ' + r.km + 'km×' + rate + '원, ' + r.date + ')', 금액: Math.round(r.km * rate) });
+        }
+      });
+    }
+
     const total = items.reduce((s, it) => s + it.금액, 0);
     const out = {
       format: 'expense-submission',
@@ -1441,7 +1755,9 @@ async function exportSubmission() {
       ym: state.ym,
       exportedAt: new Date().toISOString(),
       items,
-      total
+      total,
+      vehicleLog,
+      totalKm
     };
     const blob = new Blob([JSON.stringify(out, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
@@ -1459,6 +1775,230 @@ async function exportSubmission() {
 }
 
 
+/* ============================================================
+   6c. 인쇄물(PDF) 만들기
+   ------------------------------------------------------------
+   화면에 보이지 않는 #printArea 안에 지출내역서(표지)·출금전표·영수증·
+   차량운행 기록을 순서대로 이어 채운 뒤, 브라우저 인쇄(window.print())를
+   띄웁니다. 휴대폰에서는 인쇄 대화상자의 "PDF로 저장"을 고르면 됩니다.
+   유료 라이브러리를 전혀 쓰지 않고, 브라우저가 원래 가진 기능만 씁니다.
+
+   페이지를 미리 자르지 않고 문서를 죽 이어 쓴 뒤 page-break 규칙만
+   지정해 둡니다. 그래서 영수증처럼 세로 길이가 제각각인 내용도
+   브라우저가 알아서 다음 장으로 자연스럽게 넘겨줍니다 - 영수증이
+   길어서 안 들어가는 경우를 저희가 미리 계산해서 자르지 않아도,
+   실제로 항상 정확하게 처리됩니다.
+
+   출금전표 크기 : 계정과목별 건수가 9건 이하면 절반 크기, 9건을
+   넘으면 전체 크기로 바뀝니다(기존 v45/v46 서식이 절반 한 장에
+   정확히 9행이었던 것과 맞춘 기준입니다). 전체 크기 한 장에는
+   20건까지 들어가고, 그보다 많으면 "부분합계"를 넣어 다음 장으로
+   이어집니다. 영수증은 항상 그 계정과목의 표가 끝나는 바로 아래부터
+   배치됩니다.
+   ============================================================ */
+function esc(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  }[c]));
+}
+function chunkArr(arr, size) {
+  const out = [];
+  for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
+  return out;
+}
+const PRINT_HALF_MAX = 9;   // 절반 크기 출금전표 한 장의 최대 건수 (v46 서식과 동일)
+const PRINT_FULL_MAX = 20;  // 전체 크기 출금전표 한 장의 최대 건수 (절반의 약 2배)
+const PT_COLGROUP =
+  '<colgroup><col style="width:5%"><col style="width:9%"><col style="width:45%">' +
+  '<col style="width:18%"><col style="width:23%"></colgroup>';
+
+function ptHeaderRow() {
+  return '<tr style="background:#f0f0f0">' +
+    '<td style="font-weight:700">번호</td><td style="font-weight:700">날짜</td>' +
+    '<td style="font-weight:700">적요</td><td style="font-weight:700">지출처</td>' +
+    '<td style="font-weight:700">금액</td></tr>';
+}
+function ptRow(no, e) {
+  return '<tr>' +
+    '<td><span class="pv-badge">' + no + '</span></td>' +
+    '<td style="white-space:nowrap">' + esc(e.date.slice(5).replace('-', '/')) + '</td>' +
+    '<td class="dl">' + esc(e.desc || '') + '</td>' +
+    '<td class="dl">' + esc(e.place || '') + '</td>' +
+    '<td style="text-align:right">' + comma(e.amount) + '</td></tr>';
+}
+function ptTotalRow(label, amount) {
+  return '<tr><td></td><td colspan="3" style="text-align:right;font-weight:700">' + esc(label) + '</td>' +
+    '<td style="text-align:right;font-weight:700">' + comma(amount) + '</td></tr>';
+}
+
+async function buildReceiptMasonry(items, startNo) {
+  const withPhoto = [];
+  for (let i = 0; i < items.length; i++) {
+    const e = items[i];
+    if (!e.receiptId) continue;
+    const r = await dbGet('receipts', e.receiptId);
+    if (!r || !r.blob) continue;
+    withPhoto.push({ no: startNo + i, r });
+  }
+  if (!withPhoto.length) return '';
+  const parts = withPhoto.map(({ no, r }) => {
+    const url = URL.createObjectURL(r.blob);
+    state.printUrls.push(url);
+    // 가로가 세로보다 많이 긴 사진(예: 가로로 찍힌 영수증)은 3등분하지 않고
+    // 한 줄 전체를 씁니다. 그 외에는 3열 배치에 자연스럽게 섞여 들어갑니다.
+    const isWide = r.w && r.h && (r.w / r.h) > 1.3;
+    return '<div class="' + (isWide ? 'pv-wide' : 'pv-receipt') + '">' +
+      '<span class="pv-badge">' + no + '</span><img src="' + url + '"></div>';
+  });
+  return '<div class="pv-masonry">' + parts.join('') + '</div>';
+}
+
+async function buildCategoryBlock(cat, items, monthLabel) {
+  const isHalf = items.length <= PRINT_HALF_MAX;
+  const capacity = isHalf ? PRINT_HALF_MAX : PRINT_FULL_MAX;
+  const chunks = chunkArr(items, capacity);
+  const catTotal = items.reduce((s, e) => s + e.amount, 0);
+  const masonryHtml = await buildReceiptMasonry(items, 1);
+
+  let html = '';
+  let no = 1;
+  for (let idx = 0; idx < chunks.length; idx++) {
+    const ck = chunks[idx];
+    const isLastChunk = idx === chunks.length - 1;
+    const chunkTotal = ck.reduce((s, e) => s + e.amount, 0);
+    const label = chunks.length > 1
+      ? (isLastChunk ? '총 합 계' : '부분합계 (' + (idx + 1) + '/' + chunks.length + ')')
+      : '합&nbsp;&nbsp;계';
+    const rows = ck.map((e, i) => ptRow(no + i, e)).join('');
+    const pageNote = chunks.length > 1 ? ', ' + (idx + 1) + '/' + chunks.length + '장' : '';
+    html += '<div class="pv-cat">' +
+      '<div style="text-align:center;font-size:' + (isHalf ? 14 : 16) + 'pt;font-weight:700;letter-spacing:5px;margin:2mm 0">출&nbsp;&nbsp;금&nbsp;&nbsp;전&nbsp;&nbsp;표</div>' +
+      '<div style="border-bottom:1.5px solid black;margin-bottom:2mm"></div>' +
+      '<div style="font-size:9pt;text-align:center;margin-bottom:3mm">' + esc(monthLabel) + ' · ' + esc(cat) + ' (' + items.length + '건' + pageNote + ')</div>' +
+      '<table class="pv-table">' + PT_COLGROUP + '<tbody>' + ptHeaderRow() + rows +
+      ptTotalRow(label, isLastChunk ? catTotal : chunkTotal) + '</tbody></table>' +
+      (isLastChunk ? masonryHtml : '') +
+      '</div>';
+    no += ck.length;
+  }
+  return html;
+}
+
+async function buildCoverPage() {
+  const catTotals = {};
+  CFG.categories.forEach(c => catTotals[c] = 0);
+  state.entries.forEach(e => { if (catTotals[e.cat] != null) catTotals[e.cat] += e.amount; });
+  const grand = state.entries.reduce((s, e) => s + e.amount, 0);
+  const [y, m] = state.ym.split('-');
+  const lastDay = new Date(Number(y), Number(m), 0).getDate();
+  const profile = (await dbGet('meta', 'profile')) || {};
+  const rows = CFG.categories.map(c => '<tr>' +
+    '<td style="text-align:center">' + esc(c) + '</td>' +
+    '<td>' + Number(m) + '월 사용분 청구</td><td></td>' +
+    '<td style="text-align:right">' + (catTotals[c] ? '₩ ' + comma(catTotals[c]) : '-') + '</td></tr>'
+  ).join('');
+  return '<div class="pv-cover">' +
+    '<div style="border:1px solid black;height:20mm;display:flex;align-items:center;justify-content:center;margin-bottom:5mm">' +
+    '<span style="font-size:18pt;font-weight:700;letter-spacing:8px">지 출 내 역 서</span></div>' +
+    '<table class="pv-st"><colgroup><col style="width:18%"><col><col style="width:15%"><col style="width:22%"></colgroup>' +
+    '<thead><tr style="background:#f0f0f0"><th>계 정 과 목</th><th>내&nbsp;&nbsp;&nbsp;역</th><th>지 출 처</th><th>금&nbsp;&nbsp;액</th></tr></thead>' +
+    '<tbody>' + rows +
+    '<tr style="font-weight:700"><td style="text-align:center">합 계 금 액</td>' +
+    '<td style="text-align:right">₩&nbsp;' + comma(grand) + '</td>' +
+    '<td style="text-align:center">지 출 방 식</td><td></td></tr>' +
+    '<tr><td style="text-align:center;font-weight:700">지 출 일 자</td>' +
+    '<td style="text-align:center">' + y + '년 ' + Number(m) + '월 ' + lastDay + '일</td>' +
+    '<td style="text-align:center;font-weight:700">지&nbsp;&nbsp;출&nbsp;&nbsp;인</td>' +
+    '<td style="text-align:center">' + esc(profile.name || '') + '</td></tr>' +
+    '</tbody></table>' +
+    '<div style="font-size:9pt;margin-top:4mm">상기와 같이 지출하였으니 전자결재로 제출합니다.</div>' +
+    '<div style="text-align:center;font-size:11pt;font-weight:700;margin-top:6mm">' + esc(profile.company || '') + '</div>' +
+    '</div>';
+}
+
+function buildVehicleLogPage() {
+  if (!state.runs.length) return '';
+  const [y, m] = state.ym.split('-');
+  const year = Number(y), month = Number(m);
+  const lastDay = new Date(year, month, 0).getDate();
+  const runMap = new Map(state.runs.map(r => [r.date, r]));
+  let totalKm = 0;
+  const rows = [];
+  for (let day = 1; day <= lastDay; day++) {
+    const dateStr = year + '-' + pad2(month) + '-' + pad2(day);
+    const r = runMap.get(dateStr);
+    const km = r ? (r.km || 0) : 0;
+    totalKm += km;
+    const dow = new Date(year, month - 1, day).getDay();
+    let bg = r ? '#ffffff' : '#eeeeee';
+    if (dow === 0) bg = r ? '#ffe8e8' : '#f5d0d0';
+    if (dow === 6) bg = r ? '#e8eeff' : '#d0d6f5';
+    rows.push('<tr style="height:5.5mm">' +
+      '<td style="border:1px solid black;background:' + bg + ';text-align:center;font-size:8.5pt;font-weight:700">' + day + '</td>' +
+      '<td style="border:1px solid black;background:' + bg + ';text-align:left;font-size:8pt;padding-left:1.5mm">' +
+      (r ? esc((r.from || '') + ' → ' + (r.to || '')) : '') + '</td>' +
+      '<td style="border:1px solid black;background:' + bg + ';text-align:right;font-size:8pt;padding-right:2mm">' +
+      (km ? comma(km) : '') + '</td></tr>');
+  }
+  return '<div class="pv-vlog">' +
+    '<div style="text-align:center;font-size:16pt;font-weight:700;letter-spacing:6px;margin:2mm 0">차 량 운 행 일 지</div>' +
+    '<div style="border-bottom:1.5px solid black;margin-bottom:2mm"></div>' +
+    '<div style="font-size:9pt;text-align:center;margin-bottom:3mm">' + year + '년 ' + month + '월 · 이번 달 총 주행거리 ' + comma(totalKm) + 'km</div>' +
+    '<table class="pv-table" style="table-layout:fixed">' +
+    '<colgroup><col style="width:10%"><col><col style="width:20%"></colgroup><tbody>' +
+    '<tr style="background:#f0f0f0"><td style="font-weight:700">일자</td>' +
+    '<td style="font-weight:700">출발지 → 목적지</td><td style="font-weight:700">주행거리(km)</td></tr>' +
+    rows.join('') + '</tbody></table></div>';
+}
+
+async function buildPrintArea() {
+  const [y, m] = state.ym.split('-');
+  const monthLabel = y + '년 ' + Number(m) + '월 ' + new Date(Number(y), Number(m), 0).getDate() + '일';
+
+  const grouped = {};
+  CFG.categories.forEach(c => grouped[c] = []);
+  state.entries.forEach(e => { if (grouped[e.cat]) grouped[e.cat].push(e); });
+  CFG.categories.forEach(c => grouped[c].sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0)));
+
+  let html = await buildCoverPage();
+  for (const cat of CFG.categories) {
+    const items = grouped[cat];
+    if (!items.length) continue;
+    html += await buildCategoryBlock(cat, items, monthLabel);
+  }
+  html += buildVehicleLogPage();
+
+  $('printArea').innerHTML = html;
+}
+
+async function makePrintout() {
+  if (!state.entries.length && !state.runs.length) {
+    toast('이번 달 내역이 없습니다');
+    return;
+  }
+  const profile = await dbGet('meta', 'profile');
+  if (!profile || !profile.name) {
+    toast('설정 화면의 "제출자 정보"에 이름을 먼저 입력해 주십시오');
+    return;
+  }
+  busy(true);
+  try {
+    await buildPrintArea();
+    busy(false);
+    setTimeout(() => window.print(), 150);
+  } catch (err) {
+    busy(false);
+    console.error(err);
+    toast('인쇄물을 만들지 못했습니다');
+  }
+}
+window.addEventListener('afterprint', () => {
+  state.printUrls.forEach(u => URL.revokeObjectURL(u));
+  state.printUrls = [];
+  $('printArea').innerHTML = '';
+});
+
+
 const blobToDataURL = b => new Promise(res => {
   const r = new FileReader();
   r.onload = () => res(r.result);
@@ -1471,7 +2011,8 @@ async function exportBackup() {
   try {
     const entries = await dbAll('entries');
     const receipts = await dbAll('receipts');
-    const out = { format: 'expense-backup', version: 1, app: CFG.version, exportedAt: new Date().toISOString(), entries, receipts: [] };
+    const vehicleRuns = await dbAll('vehicleRuns');
+    const out = { format: 'expense-backup', version: 1, app: CFG.version, exportedAt: new Date().toISOString(), entries, vehicleRuns, receipts: [] };
     for (const r of receipts) {
       out.receipts.push({ id: r.id, w: r.w, h: r.h, size: r.size, createdAt: r.createdAt, data: await blobToDataURL(r.blob) });
     }
@@ -1500,6 +2041,7 @@ async function importBackup(file) {
       await dbPut('receipts', { id: r.id, blob, thumb, w: r.w, h: r.h, size: r.size || blob.size, createdAt: r.createdAt });
     }
     for (const e of (data.entries || [])) await dbPut('entries', e);
+    for (const r of (data.vehicleRuns || [])) await dbPut('vehicleRuns', r);
     await loadMonth();
     await refreshDiag();
     toast('불러왔습니다 (' + (data.entries || []).length + '건)');
@@ -1512,6 +2054,7 @@ async function wipeAll() {
   if (!confirm('정말 지우시겠습니까? 백업 파일이 없으면 복구할 수 없습니다.')) return;
   await dbClear('entries');
   await dbClear('receipts');
+  await dbClear('vehicleRuns');
   await loadMonth();
   await refreshDiag();
   toast('전부 지웠습니다');
@@ -1531,6 +2074,12 @@ $('fCancel').onclick = () => { state.editingId = null; popSheet(); };
 $('fSave').onclick = saveEntry;
 $('fSaveTop').onclick = saveEntry;
 $('fDelete').onclick = deleteEntry;
+
+$('addRunBtn').onclick = () => openRunForm(null);
+$('runCancel').onclick = () => { state.runEditingId = null; popSheet(); };
+$('runSave').onclick = saveRun;
+$('runSaveTop').onclick = saveRun;
+$('runDelete').onclick = deleteRun;
 
 $('btnCamera').onclick = () => $('fileCamera').click();
 $('btnAlbum').onclick  = () => $('fileAlbum').click();
@@ -1566,8 +2115,11 @@ $('fAmount').addEventListener('input', e => {
 });
 
 $('btnPersist').onclick = requestPersist;
+$('btnFuelToggle').onclick = toggleFuelPref;
 $('btnExportSubmission').onclick = exportSubmission;
+$('btnPrint').onclick = makePrintout;
 $('pName').addEventListener('change', saveProfileName);
+$('pCompany').addEventListener('change', saveProfileName);
 $('btnExport').onclick = exportBackup;
 $('btnImport').onclick = () => $('fileImport').click();
 $('fileImport').onchange = e => { importBackup(e.target.files[0]); e.target.value = ''; };
@@ -1577,6 +2129,7 @@ $('btnWipe').onclick = wipeAll;
 window.addEventListener('popstate', () => {
   if ($('cropSheet').classList.contains('on')) closeCropSheet();
   else if ($('formSheet').classList.contains('on')) { state.editingId = null; closeForm(); }
+  else if ($('runSheet').classList.contains('on')) { state.runEditingId = null; closeRunForm(); }
   else if ($('setSheet').classList.contains('on')) closeSettings();
 });
 
@@ -1601,6 +2154,7 @@ window.addEventListener('popstate', () => {
       navigator.storage.persisted().then(ok => { if (!ok) navigator.storage.persist().catch(() => {}); });
     }
 
+    await loadVehiclePref();
     state.ym = todayStr().slice(0, 7);
     await loadMonth();
 
