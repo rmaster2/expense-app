@@ -3,7 +3,7 @@
    (예: version 이 '0.9.3' 이면 아래도 'expense-0.9.3')
    그래야 휴대폰이 옛날 화면을 계속 보여주지 않고, 두 값이 어긋날 일도 없습니다. */
 
-const CACHE = 'expense-0.9.4';
+const CACHE = 'expense-0.9.5';
 const FILES = ['./', './index.html', './config.js', './manifest.json', './icon-192.png', './icon-512.png'];
 
 self.addEventListener('install', e => {
