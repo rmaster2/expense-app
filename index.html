@@ -1891,8 +1891,12 @@ async function buildCategoryBlock(cat, items, monthLabel) {
     const isLastChunk = idx === chunks.length - 1;
     const chunkTotal = ck.reduce((s, e) => s + e.amount, 0);
     const label = chunks.length > 1
-      ? (isLastChunk ? '총 합 계' : '부분합계 (' + (idx + 1) + '/' + chunks.length + ')')
-      : '합&nbsp;&nbsp;계';
+      // 주의 : 이 글자는 esc()(따옴표·꺾쇠 등을 안전하게 바꿔주는 처리)를 거칩니다.
+      // 그래서 여기에 '&nbsp;' 같은 HTML 기호를 쓰면 안 됩니다 - 기호가 그대로
+      // 글자로 찍혀 "합&nbsp;&nbsp;계" 처럼 보이는 사고가 났습니다.
+      // 글자 사이를 벌릴 때는 아래처럼 진짜 공백문자( )를 씁니다.
+      ? (isLastChunk ? '총  합  계' : '부분합계 (' + (idx + 1) + '/' + chunks.length + ')')
+      : '합  계';
     const rows = ck.map((e, i) => ptRow(no + i, e)).join('');
     const pageNote = chunks.length > 1 ? ', ' + (idx + 1) + '/' + chunks.length + '장' : '';
     // 영수증은 "그 장에 실린 항목의 영수증"만 그 표 바로 아래에 붙입니다.
