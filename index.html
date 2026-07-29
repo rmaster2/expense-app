@@ -295,50 +295,9 @@ textarea.inp{height:auto;padding:12px 13px;resize:none;line-height:1.5}
   *{transition:none!important;animation:none!important}
 }
 
-/* ---------- 인쇄물(PDF) ----------
-   화면에는 보이지 않다가, "인쇄물 만들기"를 누르면 이 안에 내용을 채우고
-   브라우저 인쇄(= 휴대폰에서는 "PDF로 저장")를 띄웁니다. 별도 유료 프로그램이나
-   라이브러리 없이, 브라우저가 원래 가진 인쇄 기능만 그대로 씁니다.
-   페이지를 미리 딱딱 잘라 만들지 않고, 문서를 죽 이어 쓰듯 만든 뒤
-   page-break 규칙으로 "여기서는 새 장으로" 정도만 지정합니다 - 그래야
-   영수증처럼 세로 길이가 제각각인 내용도 브라우저가 알아서 다음 장으로
-   자연스럽게 넘겨줍니다(억지로 계산해서 자르지 않아도 됩니다). */
-#printArea{display:none}
-@media print{
-  /* "화면의 이 부분만 인쇄"를 만들 때 가장 널리 쓰이고 안정적인 방식으로 바꿨습니다.
-     (이전 방식이 일부 휴대폰에서 인쇄물이 완전히 백지로 나오는 문제가 있었습니다.)
-     모든 것을 안 보이게(visibility:hidden) 한 뒤, #printArea 안쪽만 다시 보이게
-     하고, 그 부분을 페이지 맨 위로 끌어올립니다. */
-  body *{visibility:hidden}
-  #printArea, #printArea *{visibility:visible}
-  #printArea{
-    display:block!important;position:absolute;top:0;left:0;
-    width:100%;margin:0;padding:0;
-  }
-  @page{size:A4 portrait;margin:0}
-}
-#printArea{font-family:'맑은 고딕','Malgun Gothic',sans-serif;color:#000}
-.pv-cover{
-  width:178mm;min-height:277mm;box-sizing:border-box;
-  padding:10mm 16mm 0;page-break-after:always;
-}
-.pv-cat{padding:10mm 16mm 0;page-break-before:always;box-sizing:border-box;width:210mm}
-.pv-vlog{padding:10mm 16mm 0;page-break-before:always;box-sizing:border-box;width:210mm}
-.pv-st{width:178mm;border-collapse:collapse;font-size:9pt}
-.pv-st td,.pv-st th{border:1px solid black;padding:0.5mm 2mm;height:8.5mm;vertical-align:middle}
-.pv-table{width:100%;border-collapse:collapse;font-size:9pt;table-layout:fixed;page-break-inside:avoid}
-.pv-table td,.pv-table th{border:1px solid black;padding:0.8mm 1mm;text-align:center;vertical-align:middle;overflow:hidden}
-.pv-table .dl{text-align:left;padding-left:1.5mm;white-space:normal;word-break:break-all}
-.pv-badge{
-  display:inline-flex;align-items:center;justify-content:center;
-  width:5.5mm;height:5.5mm;border-radius:50%;background:#333;color:#fff;
-  font-size:7.5pt;font-weight:700;flex:0 0 auto;
-}
-.pv-receipt{position:relative;break-inside:avoid;margin-bottom:4mm;border:1px solid #ccc}
-.pv-receipt img{width:100%;display:block}
-.pv-receipt .pv-badge{position:absolute;top:2mm;left:2mm}
-.pv-masonry{column-count:3;column-gap:4mm;margin-top:6mm}
-.pv-wide{column-span:all;margin-bottom:4mm}
+/* 인쇄물(PDF) 관련 스타일은 이제 이 화면과 완전히 분리된 새 창에서만 씁니다
+   (자세한 이유는 index.html의 makePrintout 함수 주석 참고). 그래서 여기에는
+   더 이상 인쇄 전용 스타일이 없습니다. */
 </style>
 </head>
 <body>
@@ -640,7 +599,6 @@ textarea.inp{height:auto;padding:12px 13px;resize:none;line-height:1.5}
 
 <div class="toast" id="toast"></div>
 <div class="busy" id="busy">처리 중입니다…</div>
-<div id="printArea"></div>
 
 <script src="./config.js"></script>
 <script type="importmap">
@@ -686,8 +644,7 @@ const state = {
   keepReceiptId: null,
   cat: CFG.categories[0],
   pay: CFG.payMethods[0],
-  urls: [],          // 목록에서 만든 임시 사진 주소 (정리용)
-  printUrls: []      // 인쇄물 화면에서 만든 임시 사진 주소 (정리용)
+  urls: []           // 목록에서 만든 임시 사진 주소 (정리용)
 };
 
 const pad2 = n => String(n).padStart(2, '0');
@@ -1786,10 +1743,10 @@ async function exportSubmission() {
 /* ============================================================
    6c. 인쇄물(PDF) 만들기
    ------------------------------------------------------------
-   화면에 보이지 않는 #printArea 안에 지출내역서(표지)·출금전표·영수증·
-   차량운행 기록을 순서대로 이어 채운 뒤, 브라우저 인쇄(window.print())를
-   띄웁니다. 휴대폰에서는 인쇄 대화상자의 "PDF로 저장"을 고르면 됩니다.
-   유료 라이브러리를 전혀 쓰지 않고, 브라우저가 원래 가진 기능만 씁니다.
+   이 화면과 완전히 분리된 새 창을 열어, 그 안에 지출내역서(표지)·출금전표·
+   영수증·차량운행 기록을 순서대로 이어 쓴 뒤 그 창만 인쇄합니다(window.print()).
+   휴대폰에서는 인쇄 대화상자의 "PDF로 저장"을 고르면 됩니다. 유료 라이브러리를
+   전혀 쓰지 않고, 브라우저가 원래 가진 기능만 씁니다.
 
    페이지를 미리 자르지 않고 문서를 죽 이어 쓴 뒤 page-break 규칙만
    지정해 둡니다. 그래서 영수증처럼 세로 길이가 제각각인 내용도
@@ -1849,15 +1806,18 @@ async function buildReceiptMasonry(items, startNo) {
     withPhoto.push({ no: startNo + i, r });
   }
   if (!withPhoto.length) return '';
-  const parts = withPhoto.map(({ no, r }) => {
-    const url = URL.createObjectURL(r.blob);
-    state.printUrls.push(url);
+  const parts = [];
+  for (const { no, r } of withPhoto) {
+    // 인쇄물은 완전히 별도의 새 창(다른 문서)에서 열리기 때문에, 이 화면에서만
+    // 쓸 수 있는 blob: 임시 주소 대신 데이터 자체를 그대로 담는 data: 주소를
+    // 씁니다. 그래야 새 창에서도 사진이 확실히 보입니다.
+    const dataUrl = await blobToDataURL(r.blob);
     // 가로가 세로보다 많이 긴 사진(예: 가로로 찍힌 영수증)은 3등분하지 않고
     // 한 줄 전체를 씁니다. 그 외에는 3열 배치에 자연스럽게 섞여 들어갑니다.
     const isWide = r.w && r.h && (r.w / r.h) > 1.3;
-    return '<div class="' + (isWide ? 'pv-wide' : 'pv-receipt') + '">' +
-      '<span class="pv-badge">' + no + '</span><img src="' + url + '"></div>';
-  });
+    parts.push('<div class="' + (isWide ? 'pv-wide' : 'pv-receipt') + '">' +
+      '<span class="pv-badge">' + no + '</span><img src="' + dataUrl + '"></div>');
+  }
   return '<div class="pv-masonry">' + parts.join('') + '</div>';
 }
 
@@ -1959,7 +1919,7 @@ function buildVehicleLogPage() {
     rows.join('') + '</tbody></table></div>';
 }
 
-async function buildPrintArea() {
+async function buildPrintBodyHtml() {
   const [y, m] = state.ym.split('-');
   const monthLabel = y + '년 ' + Number(m) + '월 ' + new Date(Number(y), Number(m), 0).getDate() + '일';
 
@@ -1975,48 +1935,106 @@ async function buildPrintArea() {
     html += await buildCategoryBlock(cat, items, monthLabel);
   }
   html += buildVehicleLogPage();
-
-  $('printArea').innerHTML = html;
+  return html;
 }
 
-async function makePrintout() {
+// 인쇄 전용 문서에 그대로 들어가는 스타일입니다. 이 화면(index.html)의 스타일과는
+// 완전히 분리되어 있습니다 - 아래 makePrintout 주석 참고.
+const PRINT_DOC_STYLE =
+  'body{font-family:\'맑은 고딕\',\'Malgun Gothic\',sans-serif;color:#000;margin:0}' +
+  '@page{size:A4 portrait;margin:0}' +
+  '.pv-cover{width:178mm;min-height:277mm;box-sizing:border-box;padding:10mm 16mm 0;page-break-after:always}' +
+  '.pv-cat{padding:10mm 16mm 0;page-break-before:always;box-sizing:border-box;width:210mm}' +
+  '.pv-vlog{padding:10mm 16mm 0;page-break-before:always;box-sizing:border-box;width:210mm}' +
+  '.pv-st{width:178mm;border-collapse:collapse;font-size:9pt}' +
+  '.pv-st td,.pv-st th{border:1px solid black;padding:0.5mm 2mm;height:8.5mm;vertical-align:middle}' +
+  '.pv-table{width:100%;border-collapse:collapse;font-size:9pt;table-layout:fixed;page-break-inside:avoid}' +
+  '.pv-table td,.pv-table th{border:1px solid black;padding:0.8mm 1mm;text-align:center;vertical-align:middle;overflow:hidden}' +
+  '.pv-table .dl{text-align:left;padding-left:1.5mm;white-space:normal;word-break:break-all}' +
+  '.pv-badge{display:inline-flex;align-items:center;justify-content:center;width:5.5mm;height:5.5mm;' +
+  'border-radius:50%;background:#333;color:#fff;font-size:7.5pt;font-weight:700;flex:0 0 auto}' +
+  '.pv-receipt{position:relative;break-inside:avoid;margin-bottom:4mm;border:1px solid #ccc}' +
+  '.pv-receipt img{width:100%;display:block}' +
+  '.pv-receipt .pv-badge{position:absolute;top:2mm;left:2mm}' +
+  '.pv-masonry{column-count:3;column-gap:4mm;margin-top:6mm}' +
+  '.pv-wide{column-span:all;margin-bottom:4mm}';
+
+function wrapPrintDocument(innerHtml) {
+  return '<!doctype html><html lang="ko"><head><meta charset="utf-8">' +
+    '<title>경비청구 인쇄물</title><style>' + PRINT_DOC_STYLE + '</style></head>' +
+    '<body>' + innerHtml + '</body></html>';
+}
+
+/* ------------------------------------------------------------
+   인쇄를 "이 화면 안의 일부만 인쇄"하는 방식으로 처음 만들었는데, 실제
+   갤럭시 휴대폰(삼성 인터넷/크롬)에서 인쇄물이 완전히 백지로 나오는 문제가
+   있었습니다. 이 화면은 사진 촬영·사각보정 등 화면이 여러 겹(사진 편집,
+   설정 등)으로 겹쳐 있어서, "다른 부분은 숨기고 이 부분만 보이게" 하는
+   방식이 일부 휴대폰에서 제대로 동작하지 않은 것으로 보입니다.
+
+   그래서 인쇄물을 이 화면과 완전히 분리된 새 창(빈 문서)에 통째로 새로
+   써서 그 창만 인쇄하는 방식으로 바꿨습니다. 이 방식은 이 화면에 어떤
+   내용이 열려 있든 전혀 영향을 받지 않아 더 확실합니다.
+
+   새 창은 반드시 사진기(사용자가 버튼을 누른) 그 순간에 바로 열어야 합니다.
+   내용을 다 만든 뒤에 열면, 휴대폰 브라우저가 "팝업 차단"으로 막아버릴 수
+   있기 때문입니다. 그래서 아래 makePrintout()은 제일 먼저(사진을 읽어오기
+   전에) 빈 창부터 열고, 그 다음에 내용을 만들어 그 창에 채워 넣습니다.
+   ------------------------------------------------------------ */
+function makePrintout() {
+  const printWin = window.open('', '_blank');
+  if (!printWin) {
+    toast('인쇄 창을 열지 못했습니다. 휴대폰의 팝업 차단 설정을 확인해 주십시오');
+    return;
+  }
+  printWin.document.write(
+    '<!doctype html><html lang="ko"><head><meta charset="utf-8"><title>인쇄물 준비 중</title></head>' +
+    '<body style="font-family:sans-serif;padding:40px;color:#888">인쇄물을 준비하고 있습니다…</body></html>'
+  );
+  runPrintFlow(printWin);
+}
+
+async function runPrintFlow(printWin) {
   if (!state.entries.length && !state.runs.length) {
     toast('이번 달 내역이 없습니다');
+    try { printWin.close(); } catch (e) {}
     return;
   }
   const profile = await dbGet('meta', 'profile');
   if (!profile || !profile.name) {
     toast('설정 화면의 "제출자 정보"에 이름을 먼저 입력해 주십시오');
+    try { printWin.close(); } catch (e) {}
     return;
   }
   busy(true);
   try {
-    await buildPrintArea();
+    const bodyHtml = await buildPrintBodyHtml();
+    const fullHtml = wrapPrintDocument(bodyHtml);
     busy(false);
-    const area = $('printArea');
-    if (!area.innerHTML || area.innerHTML.length < 20) {
-      toast('인쇄할 내용을 만들지 못했습니다. 다시 시도해 주십시오');
+    if (printWin.closed) {
+      toast('인쇄 창이 닫혔습니다. 다시 시도해 주십시오');
       return;
     }
-    // innerHTML을 넣은 직후 바로 인쇄하면, 휴대폰에 따라 화면이 아직 그려지기
-    // 전이라 인쇄물이 백지로 나오는 경우가 있었습니다. 화면이 실제로 두 번
-    // 그려질 때까지 기다렸다가(requestAnimationFrame 두 번) 인쇄를 띄웁니다.
-    requestAnimationFrame(() => {
-      requestAnimationFrame(() => {
-        window.print();
-      });
-    });
+    printWin.document.open();
+    printWin.document.write(fullHtml);
+    printWin.document.close();
+
+    // 인쇄는 딱 한 번만 실행되도록 합니다(아래 두 방법 중 먼저 되는 쪽으로).
+    let printed = false;
+    const doPrint = () => {
+      if (printed) return;
+      printed = true;
+      try { printWin.focus(); printWin.print(); } catch (e) {}
+    };
+    printWin.onload = () => setTimeout(doPrint, 200);
+    setTimeout(doPrint, 800); // onload가 늦거나 안 뜰 때를 대비한 보험
   } catch (err) {
     busy(false);
     console.error(err);
     toast('인쇄물을 만들지 못했습니다');
+    try { printWin.close(); } catch (e) {}
   }
 }
-window.addEventListener('afterprint', () => {
-  state.printUrls.forEach(u => URL.revokeObjectURL(u));
-  state.printUrls = [];
-  $('printArea').innerHTML = '';
-});
 
 
 const blobToDataURL = b => new Promise(res => {
