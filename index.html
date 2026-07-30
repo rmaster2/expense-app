@@ -46,6 +46,15 @@ button,input,select,textarea{font-family:inherit;font-size:inherit;color:inherit
 button{cursor:pointer;border:none;background:none;padding:0}
 :focus-visible{outline:2px solid var(--ink);outline-offset:2px;border-radius:4px}
 
+/* "숨기기"가 확실히 먹게 합니다.
+   브라우저는 hidden 속성을 [hidden]{display:none} 규칙으로 처리하는데,
+   이 규칙은 우선순위가 가장 낮아서 아래쪽에 display:block / display:flex 를
+   지정한 클래스가 있으면 그 클래스가 이깁니다. 그래서 사진 칸(.photo-view,
+   display:block)과 사진 편집 버튼(.photo-btns, display:flex)은 hidden 을
+   걸어도 화면에서 사라지지 않고 있었습니다 — 저장하고 다음 영수증을 넣을 때
+   앞의 영수증 사진이 계속 남아 보이던 원인입니다. */
+[hidden]{display:none!important}
+
 .num{font-family:var(--num);font-variant-numeric:tabular-nums;letter-spacing:-0.02em}
 
 /* ---------- 상단 월 이동 ---------- */
@@ -398,12 +407,15 @@ textarea.inp{height:auto;padding:12px 13px;resize:none;line-height:1.5}
       <label for="fPlace">지출처</label>
       <input class="inp" id="fPlace" type="text" list="placeList" placeholder="예: 서면공영주차장" autocomplete="off">
       <datalist id="placeList"></datalist>
-      <p class="hint">한 번 입력한 지출처는 다음부터 자동으로 추천됩니다.</p>
     </div>
 
     <div class="field">
       <label for="fDesc">사용 내용</label>
-      <textarea class="inp" id="fDesc" rows="2" placeholder="예: 고객사 방문 주차"></textarea>
+      <input class="inp" id="fDesc" type="text" list="descList" placeholder="예: 고객사 방문 주차" autocomplete="off">
+      <datalist id="descList"></datalist>
+      <p class="hint">지출처와 사용 내용은 전에 입력한 것이 자동으로 추천됩니다.
+      칸을 누르면 목록이 열리고, 몇 글자만 입력해도 걸러서 보여줍니다.
+      지금 고른 계정과목에서 쓴 것을 위쪽에 먼저 보여줍니다.</p>
     </div>
 
     <div class="field">
@@ -1054,65 +1066,160 @@ async function applyCropCorrection() {
    유료 OCR API는 쓰지 않으며, 인식 결과는 항상 사용자가 확인한
    뒤 저장해야 합니다(자동 저장되지 않음).
    ============================================================ */
-function parseReceiptText(text) {
-  const norm = String(text || '');
-  const result = { amount: null, date: null, place: null };
+/* ------------------------------------------------------------
+   금액·날짜·지출처 파싱 (2차 개선판)
+   ------------------------------------------------------------
+   1차 버전은 "라벨 뒤에 오는 숫자를 정규식 한 방으로 잡는" 방식이었는데,
+   실제 영수증 표본으로 다시 검토해 보니 다음 사고들이 있었습니다.
+     - "부가세합계"처럼 "합계"란 글자가 들어간 다른 라벨에 낚여
+       부가세 금액을 총액으로 잘못 채움
+     - 라벨 뒤 줄바꿈을 정규식이 통과해, 다음 줄의 날짜·승인번호를
+       금액으로 잘못 가져옴
+     - "2026년 7월 6일", "26.7.1" 같은 한글 날짜·2자리 연도를 아예
+       인식하지 못함(부산 지역 수기 영수증에 흔한 형식)
+   그래서 "정규식 한 방"이 아니라 "줄 단위로 후보를 만들고 채점"하는
+   방식으로 바꿨습니다 — 줄바꿈을 넘어가는 사고가 구조적으로 생기지
+   않습니다.
+   ------------------------------------------------------------ */
 
-  // 금액: "합계"를 최우선으로 봅니다. 매출전표는 부가세 전 "금액"과
-  // 부가세 포함 "합계"가 따로 있어, "금액"을 먼저 보면 틀린 값이 잡힙니다.
-  const amountKeywords = ['합\\s*계', '결제\\s*금액', '받을\\s*금액', '받은\\s*금액', '카드\\s*결제', '금\\s*액'];
-  for (const kw of amountKeywords) {
-    // 숫자 사이에 OCR이 공백을 넣는 경우(예: "128, 000")가 있어 같은 줄 안에서는
-    // 쉼표·공백을 허용하되, 줄바꿈은 허용하지 않아 다음 항목 숫자와 붙는 사고를 막습니다.
-    // "]" 는 "[금액]" 처럼 라벨을 태그로 감싸는 영수증 형식을 위한 허용입니다.
-    const re = new RegExp(kw + '\\s*[:：]?\\s*\\]?[ \\t]*([0-9](?:[0-9,\\t ]*[0-9])?)[ \\t]*원?', 'g');
-    let m, last = null;
-    while ((m = re.exec(norm))) last = m;
-    if (last) {
-      const digitsOnly = last[1].replace(/[,\s]/g, '');
-      // 서로 다른 두 숫자가 공백만으로 이어붙어 하나의 큰 숫자로 잘못 합쳐지는
-      // 사고를 막는 안전장치입니다. 경비 한 건이 억 단위를 넘는 경우는 거의
-      // 없으므로, 8자리(최대 9,999만원)를 넘으면 잘못 합쳐졌다고 보고 비워
-      // 둡니다 — 틀린 큰 금액이 그대로 채워지는 것보다 안전합니다.
-      if (digitsOnly.length <= 8) {
-        result.amount = Number(digitsOnly);
-        break;
+// ── 금액 ──────────────────────────────────────────────────────
+const AMOUNT_LABELS = [
+  // 1순위: 최종 결제 총액
+  [1, /합\s*계|총\s*액|총\s*금\s*액|총\s*결\s*제|청\s*구\s*금\s*액|결\s*제\s*금\s*액|승\s*인\s*금\s*액|카\s*드\s*결\s*제/],
+  // 2순위: 업종별 총액(주유·주차·통행료·간이영수증). 받은금액은 거스름돈이 있어 후순위
+  [2, /거\s*래\s*금\s*액|판\s*매\s*금\s*액|이\s*용\s*금\s*액|통\s*행\s*료|주\s*차\s*료|주\s*차\s*요\s*금|이\s*용\s*료|요\s*금|대\s*금|받\s*을\s*금\s*액|받\s*은\s*금\s*액|현\s*금\s*액/],
+  // 3순위: 마지막 수단
+  [3, /금\s*액/],
+];
+// 라벨 쪽에 이 낱말이 있으면 그 줄은 총액이 아닙니다("부가세합계" 사고 차단)
+const AMOUNT_EXCLUDE = /부\s*가\s*세|부가가치세|세\s*액|봉\s*사\s*료|공\s*급\s*가|면\s*세|과\s*세|불\s*공\s*제|할\s*인|포\s*인\s*트|적\s*립|잔\s*액|거\s*스\s*름|미\s*수|수\s*량|단\s*가|리\s*터|매\s*수|봉\s*투|쿠\s*폰|마\s*일|캐\s*시|전\s*표|건\s*수/;
+
+function parseAmountToken(raw) {
+  const t = String(raw).replace(/[₩￦Ww]/g, '').replace(/[’'`·]/g, ',').trim();
+  const digits = t.replace(/[^0-9]/g, '');
+  if (!digits) return null;
+  if (/[.,\s]/.test(t)) {
+    // 콤마를 마침표·공백으로 오인식한 경우까지 복원하되, "천 단위 3자리 묶음"
+    // 규칙을 만족할 때만 신뢰합니다(주유 수량 "29.60" 같은 소수는 걸러집니다).
+    const parts = t.split(/[.,\s]+/).filter(Boolean);
+    if (parts.length > 1) {
+      if (parts[0].length > 3) return null;
+      if (parts.slice(1).some(g => g.length !== 3)) return null;
+    }
+  } else if (digits.length >= 7) {
+    return null; // 콤마 없는 7자리 이상은 승인번호·사업자번호 오인 가능성이 큼
+  }
+  const n = Number(digits);
+  if (!Number.isFinite(n) || n < 100 || n > 99999999) return null; // 100원 미만·1억 이상 거부
+  return n;
+}
+// 한 줄에서 마지막으로 나오는 유효한 금액(영수증은 값이 줄 끝에 옵니다)
+function lastAmountInLine(s) {
+  const toks = s.match(/[0-9][0-9.,\s’'`]*[0-9]|[0-9]/g) || [];
+  for (let i = toks.length - 1; i >= 0; i--) {
+    const v = parseAmountToken(toks[i]);
+    if (v != null) return v;
+  }
+  return null;
+}
+function parseAmount(lines) {
+  const cands = [];
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    for (const [prio, re] of AMOUNT_LABELS) {
+      const m = line.match(re);
+      if (!m) continue;
+      if (AMOUNT_EXCLUDE.test(line.slice(0, m.index + m[0].length))) break;
+      const after = line.slice(m.index + m[0].length);
+      let v = lastAmountInLine(after);
+      if (v == null && !/[0-9]/.test(after) && i + 1 < lines.length) {
+        // 라벨만 있고 값이 다음 줄에 있는 세로형 영수증. 다음 줄이 "숫자(+원)"
+        // 뿐일 때만 받아들입니다(날짜·승인번호가 끼어드는 사고를 막습니다).
+        const nx = lines[i + 1];
+        if (/^[₩￦]?\s*[0-9][0-9.,\s]*\s*원?$/.test(nx)) v = parseAmountToken(nx);
       }
+      if (v != null) cands.push({ prio, v, i });
+      break; // 한 줄은 가장 높은 순위 라벨로만 계산
     }
   }
+  if (!cands.length) return null;
+  const best = Math.min(...cands.map(c => c.prio));
+  const same = cands.filter(c => c.prio === best);
+  // 같은 순위가 여러 개면 가장 마지막에 나온 값(할인·정산 후 최종액)
+  same.sort((a, b) => (b.i - a.i) || (b.v - a.v));
+  return same[0].v;
+}
 
-  // 날짜: "거래일시/사용일자/매출일자" 처럼 실제 사용일을 뜻하는 라벨이 붙은
-  // 날짜를 최우선으로 봅니다. 사업자등록일 등 다른 날짜가 더 앞쪽에 나와
-  // 잘못 집히는 사고가 있었기 때문입니다. 그런 라벨을 못 찾으면 예전처럼
-  // 글 전체에서 처음 보이는 날짜 형식(YYYY/MM/DD, YYYY-MM-DD, YYYY.MM.DD)을 씁니다.
-  const dateLabelRe = /(?:거래\s*일시|거래\s*일자?|사용\s*일자?|매출\s*일자?|결제\s*일시?|승인\s*일시?)\s*[:：]?\s*\]?\s*(20\d{2})[\/\-.](\d{1,2})[\/\-.](\d{1,2})/;
-  const dm = norm.match(dateLabelRe) || norm.match(/(20\d{2})[\/\-.](\d{1,2})[\/\-.](\d{1,2})/);
-  if (dm) result.date = dm[1] + '-' + pad2(Number(dm[2])) + '-' + pad2(Number(dm[3]));
-
-  // 지출처: "가맹점명/상호명/상호/매장명/점포명" 라벨을 우선 사용.
-  // "[매장명] 국수명가 [사업자] ..." 처럼 태그를 대괄호로 감싸는 영수증 형식이
-  // 있어, 라벨 뒤에 남는 "]" 는 건너뛰고, 다음 "[" 태그가 시작되는 자리 또는
-  // 줄바꿈에서 멈춥니다(이걸 안 하면 상호명 뒤로 사업자번호·주소까지 전부
-  // 잡혀 들어오는 사고가 납니다). 그래도 30자를 넘으면 잘못 집혔을 가능성이
-  // 크므로 30자로 자릅니다. 라벨을 못 찾으면, 숫자·괄호로 시작하지 않고
-  // 주소처럼 보이지 않는 첫 줄을 후보로 씁니다. 확실한 후보가 없으면 비워
-  // 둡니다 — 틀린 값을 자동으로 채우는 것보다, 사용자가 직접 입력하도록
-  // 비워 두는 편이 안전합니다.
-  const pm = norm.match(/(?:가맹\s*점\s*명|상\s*호\s*명|상\s*호|매\s*장\s*명|점\s*포\s*명)\s*[:：]?\s*\]?\s*([^\n\[]+)/);
-  if (pm) {
-    result.place = pm[1].trim().slice(0, 30);
-  } else {
-    const addrLike = /[가-힣]+\s*(?:특별시|광역시|자치도|시|도|군|구|읍|면|동|로|길)\s*[0-9]/;
-    const lines = norm.split(/\n/).map(s => s.trim()).filter(Boolean);
-    const cand = lines.find(l =>
-      !/^[0-9\[(]/.test(l) &&
-      !addrLike.test(l) &&
-      !/^(TEL|전화|☎)/i.test(l) &&
-      !/\d{2,4}-\d{3,4}-\d{4}/.test(l)
-    );
-    if (cand) result.place = cand.slice(0, 30);
+// ── 날짜 ──────────────────────────────────────────────────────
+const DATE_LABEL = /(?:거\s*래\s*일\s*시|거\s*래\s*일\s*자?|사\s*용\s*일\s*자?|매\s*출\s*일\s*자?|결\s*제\s*일\s*시?|승\s*인\s*일\s*시?|일\s*시|입\s*차|출\s*차)/;
+const DATE_BODY = /(20\d{2}|\d{2})\s*[.\-\/년]\s*(\d{1,2})\s*[.\-\/월]\s*(\d{1,2})\s*일?/;
+const DATE_PACKED = /(?:^|[^0-9])(20\d{2})(\d{2})(\d{2})(?![0-9])/;
+function makeDate(y, m, d) {
+  y = Number(y); m = Number(m); d = Number(d);
+  if (y < 100) y += 2000; // "26.7.1" → 2026
+  if (m < 1 || m > 12 || d < 1 || d > 31) return null;
+  const dt = new Date(y, m - 1, d);
+  if (dt.getFullYear() !== y || dt.getMonth() !== m - 1 || dt.getDate() !== d) return null;
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const diff = (dt - today) / 86400000;
+  if (diff > 3 || diff < -420) return null; // 미래·너무 옛날은 오인식으로 봄(휴대폰 시계가 많이 어긋나면 조정 필요)
+  return y + '-' + pad2(m) + '-' + pad2(d);
+}
+function parseDate(lines, norm) {
+  for (const line of lines) { // 1순위: 라벨 붙은 날짜
+    const lm = line.match(DATE_LABEL);
+    if (!lm) continue;
+    const rest = line.slice(lm.index + lm[0].length);
+    for (const re of [DATE_BODY, DATE_PACKED]) {
+      const m = rest.match(re);
+      if (m) { const v = makeDate(m[1], m[2], m[3]); if (v) return v; }
+    }
   }
-  return result;
+  for (const src of [DATE_BODY, DATE_PACKED]) { // 2순위: 글 전체에서 앞에서부터
+    const re = new RegExp(src.source, 'g');
+    let m;
+    while ((m = re.exec(norm))) { const v = makeDate(m[1], m[2], m[3]); if (v) return v; }
+  }
+  return null;
+}
+
+// ── 지출처 ────────────────────────────────────────────────────
+const PLACE_LABEL = /(?:가\s*맹\s*점\s*명|가\s*맹\s*점|상\s*호\s*명|상\s*호|매\s*장\s*명|점\s*포\s*명|사\s*업\s*장\s*명|업\s*소\s*명|회\s*사\s*명)/;
+const PLACE_STOP = /\s{2,}|\s*(?:사\s*업\s*자|대\s*표|주\s*소|전\s*화|TEL|T\.|☎|가맹점번호|단말|POS)/i;
+const BIZNO = /\d{3}\s*-\s*\d{2}\s*-\s*\d{5}/;
+const PHONE = /\d{2,4}\s*-\s*\d{3,4}\s*-\s*\d{4}/;
+const ADDRESS = /(?:특별시|광역시|특별자치|[가-힣]{2,}시\s|[가-힣]{2,}군|[가-힣]{2,}구|[가-힣]+(?:읍|면|동|리)\s|[가-힣]+(?:대?로|길)\s*\d)/;
+const NOT_PLACE = /영\s*수\s*증|매\s*출\s*전\s*표|전\s*표|신\s*용\s*카\s*드|체\s*크\s*카\s*드|현\s*금\s*영\s*수|세\s*금\s*계\s*산\s*서|거\s*래\s*명\s*세|간\s*이\s*과\s*세|승\s*인|취\s*소|할\s*부|일\s*시\s*불|고\s*객\s*용|가맹점용|보\s*관\s*용|감\s*사|안\s*녕|방\s*문|합\s*계|금\s*액|부\s*가\s*세|공\s*급\s*가|단\s*가|수\s*량|품\s*명|잔\s*액|포\s*인\s*트|주\s*차\s*요\s*금|통\s*행\s*료|입\s*차|출\s*차|카\s*드\s*번\s*호|사\s*업\s*자|대\s*표\s*자|주\s*소|전\s*화|영\s*업\s*소|차\s*종|하\s*이\s*패\s*스/;
+const PLACE_HINT = /(점|식\s*당|주\s*차\s*장|마\s*트|편\s*의\s*점|카\s*페|주\s*유\s*소|충\s*전\s*소|약\s*국|병\s*원|호\s*텔|㈜|주식회사|\(주\)|주\s*차\s*빌|타\s*워)/;
+function cleanPlace(s) {
+  return String(s).replace(/[\[\]]/g, ' ').replace(BIZNO, ' ').replace(PHONE, ' ')
+    .replace(/[:：]/g, ' ').replace(/\s{2,}/g, ' ').trim().slice(0, 30).trim();
+}
+function looksLikePlace(v) {
+  if (!v || v.length < 2) return false;
+  if (!/[가-힣A-Za-z]{2}/.test(v)) return false;
+  if (BIZNO.test(v) || PHONE.test(v) || ADDRESS.test(v) || NOT_PLACE.test(v)) return false;
+  return (v.match(/\d/g) || []).length <= v.length * 0.4;
+}
+function parsePlace(lines) {
+  for (const line of lines) {
+    const lm = line.match(PLACE_LABEL);
+    if (!lm) continue;
+    let rest = line.slice(lm.index + lm[0].length).replace(/^\s*[:：]?\s*\]?\s*/, '');
+    const sm = rest.match(PLACE_STOP);
+    if (sm && sm.index > 0) rest = rest.slice(0, sm.index);
+    const v = cleanPlace(rest);
+    if (looksLikePlace(v)) return v;
+  }
+  // 라벨이 없으면 위쪽 10줄에서, 업종 낱말이 든 줄을 우선해 고릅니다.
+  const head = lines.slice(0, 10).map(cleanPlace).filter(looksLikePlace);
+  return head.find(v => PLACE_HINT.test(v)) || head[0] || null;
+}
+
+function parseReceiptText(text) {
+  const norm = String(text || '');
+  const lines = norm.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+  return { amount: parseAmount(lines), date: parseDate(lines, norm), place: parsePlace(lines) };
 }
 function fillFromOcr() {
   const text = $('fOcrText').value;
@@ -1120,7 +1227,13 @@ function fillFromOcr() {
   const r = parseReceiptText(text);
   const filled = [];
   if (r.amount) { $('fAmount').value = comma(r.amount); filled.push('금액'); }
-  if (r.date)   { $('fDate').value = r.date; filled.push('날짜'); }
+  if (r.date) {
+    $('fDate').value = r.date;
+    // fDate는 type="date"라 유효하지 않은 값을 넣으면 브라우저가 조용히
+    // 빈칸으로 되돌립니다. 실제로 채워졌는지 확인해야 "채웠습니다"라고
+    // 안내하고도 날짜가 비어 있는 사고를 막을 수 있습니다.
+    if ($('fDate').value) filled.push('날짜');
+  }
   if (r.place)  { $('fPlace').value = r.place; filled.push('지출처'); }
   toast(filled.length ? (filled.join('·') + ' 채웠습니다. 확인 후 저장하세요') : '인식하지 못했습니다. 직접 입력해 주세요');
 }
@@ -1174,12 +1287,24 @@ async function recognizeWithPaddle(blob) {
   // ("두 번째부터 이상하게 인식된다"는 문제의 원인). noCache:true 로 이 캐시를
   // 아예 쓰지 않도록 꺼서, 매번 실제 사진을 다시 읽도록 합니다.
   const result = await svc.recognize(buf, { noCache: true });
-  return result.text || '';
+  // confidence(0~1)는 라이브러리가 계산해 주는데, 예전 코드는 이 값을 버리고
+  // 있었습니다. 아래 runOcrOnPhoto에서 "인식은 됐지만 품질이 낮은 경우"를
+  // 가려내는 데 씁니다(모듈 로드 실패 같은 예외 상황만 폴백하던 문제 수정).
+  return { text: result.text || '', conf: result.confidence || 0 };
 }
 async function recognizeWithTesseract(blob) {
   if (typeof Tesseract === 'undefined') throw new Error('Tesseract 를 불러오지 못했습니다');
   const { data: { text } } = await Tesseract.recognize(blob, 'kor+eng');
   return text || '';
+}
+
+// 인식 결과가 실제로 쓸 만한지 판정합니다. 세 필드(금액/날짜/지출처) 중
+// 하나도 못 뽑았거나 글자 수가 너무 적으면 "성공했지만 쓸 수 없는" 결과로
+// 보고, 아래 runOcrOnPhoto가 2차 엔진(Tesseract)을 시도할지 판단합니다.
+function ocrScore(text, conf) {
+  const r = parseReceiptText(text);
+  const fields = (r.amount ? 1 : 0) + (r.date ? 1 : 0) + (r.place ? 1 : 0);
+  return { fields, len: text.replace(/\s/g, '').length, conf, r };
 }
 
 async function runOcrOnPhoto() {
@@ -1188,26 +1313,46 @@ async function runOcrOnPhoto() {
 
   busy(true);
   toast('글자를 읽는 중입니다\u2026 (처음에는 조금 더 걸릴 수 있습니다)');
-  let text = '', engine = '';
+  // 이전에는 PaddleOCR이 예외를 던질 때만(모듈 로드 실패 등) Tesseract로
+  // 넘어갔습니다. 그런데 사진이 흐려서 "성공은 했지만 몇 글자밖에 못 읽은"
+  // 경우는 예외가 아니라 빈 결과를 그대로 반환하기 때문에, 이런 경우에는
+  // 지금까지 Tesseract를 아예 시도조차 하지 않고 있었습니다. 이제는 인식
+  // 결과의 품질(신뢰도·글자 수·채워진 항목 수)을 보고 판단합니다.
+  let best = null, engine = '';
   try {
-    text = await recognizeWithPaddle(src);
+    const p = await recognizeWithPaddle(src);
+    best = ocrScore(p.text, p.conf);
+    best.text = p.text;
     engine = 'PaddleOCR (한글 전용)';
   } catch (err) {
-    console.warn('[PaddleOCR] 인식에 실패해 Tesseract로 대체합니다', err);
+    console.warn('[PaddleOCR] 인식에 실패했습니다', err);
+  }
+
+  const weak = !best || best.fields === 0 || best.len < 15 || best.conf < 0.55;
+  if (weak) {
     try {
-      text = await recognizeWithTesseract(src);
-      engine = 'Tesseract (대체 방식)';
+      const t = await recognizeWithTesseract(src);
+      const cand = ocrScore(t, 0.5);
+      cand.text = t;
+      if (!best || cand.fields > best.fields) {
+        best = cand;
+        engine = 'Tesseract (대체 방식)';
+      } else if (best) {
+        engine += ' (대체 방식도 확인)';
+      }
     } catch (err2) {
-      console.error(err2);
-      busy(false);
-      toast('글자를 읽지 못했습니다. 아래 칸에 직접 붙여넣어 보십시오');
-      return;
+      console.warn('[Tesseract] 대체 인식도 실패했습니다', err2);
     }
   }
-  lastOcrEngine = engine;
-  $('fOcrText').value = text;
-  fillFromOcr();
+
   busy(false);
+  if (!best) {
+    toast('글자를 읽지 못했습니다. 아래 칸에 직접 붙여넣어 보십시오');
+    return;
+  }
+  lastOcrEngine = engine;
+  $('fOcrText').value = best.text;
+  fillFromOcr();
 }
 
 
@@ -1410,6 +1555,9 @@ function showPhoto(blob, sizeText) {
   if (state.photoUrl) URL.revokeObjectURL(state.photoUrl);
   if (!blob) {
     state.photoUrl = null;
+    // 감추기만 하지 않고 사진 주소 자체를 비웁니다. 주소를 남겨 두면 어떤
+    // 이유로든 이 칸이 다시 보이게 될 때 앞의 영수증이 되살아나 보입니다.
+    $('photoView').removeAttribute('src');
     $('photoView').hidden = true;
     $('photoEmpty').hidden = false;
     $('photoEditBtns').hidden = true;
@@ -1422,6 +1570,47 @@ function showPhoto(blob, sizeText) {
   $('photoEmpty').hidden = true;
   $('photoEditBtns').hidden = false;
   if (sizeText) { $('photoSize').textContent = sizeText; $('photoSize').hidden = false; }
+}
+
+/* ------------------------------------------------------------
+   지출처·사용내용 추천 목록
+   ------------------------------------------------------------
+   전에 입력한 값을 그대로 다시 쓸 수 있게 추천합니다. 같은 곳에
+   반복해서 가는 경우(자주 가는 주차장·식당, 늘 같은 업무협의 문구)가
+   많아서, 매번 새로 입력하지 않아도 되게 하는 것이 목적입니다.
+
+   순서는 두 가지를 함께 봅니다.
+     1) 지금 고른 계정과목에서 쓴 값을 먼저 보여줍니다.
+        (주차비를 고르면 주차장 이름이, 식대비를 고르면 식당 이름이 위로)
+     2) 그 안에서는 최근에 쓴 것을 먼저 보여줍니다.
+   계정과목 칩을 바꾸면 목록도 즉시 다시 정렬됩니다.
+   ------------------------------------------------------------ */
+let historyEntries = [];   // 폼을 열 때 한 번만 읽어 둡니다
+
+function fillDataList(listId, values) {
+  const dl = $(listId);
+  dl.innerHTML = '';
+  values.forEach(v => {
+    const o = document.createElement('option');
+    o.value = v;          // 사용자가 입력한 값이라 textContent/innerHTML 대신 value로만 다룹니다
+    dl.appendChild(o);
+  });
+}
+function suggestFor(field) {
+  const cat = state.cat;
+  // 최근 것이 위로 오도록 뒤에서부터 봅니다
+  const rows = historyEntries.slice().sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+  const mine = [], others = [];
+  rows.forEach(r => {
+    const v = (r[field] || '').trim();
+    if (!v) return;
+    (r.cat === cat ? mine : others).push(v);
+  });
+  return [...new Set([...mine, ...others])].slice(0, 200);
+}
+function refreshSuggestLists() {
+  fillDataList('placeList', suggestFor('place'));
+  fillDataList('descList', suggestFor('desc'));
 }
 
 async function openForm(id) {
@@ -1445,7 +1634,8 @@ async function openForm(id) {
   state.cat = e ? e.cat : CFG.categories[0];
   state.pay = e ? e.pay : CFG.payMethods[0];
 
-  buildChips($('fCats'), CFG.categories, () => state.cat, v => state.cat = v);
+  // 계정과목을 바꾸면 추천 목록도 그 과목에서 쓴 것이 위로 오게 다시 정렬합니다
+  buildChips($('fCats'), CFG.categories, () => state.cat, v => { state.cat = v; refreshSuggestLists(); });
   buildChips($('fPays'), CFG.payMethods, () => state.pay, v => state.pay = v);
 
   showPhoto(null);
@@ -1455,11 +1645,9 @@ async function openForm(id) {
     if (r) showPhoto(r.blob, r.w + '×' + r.h + ' · ' + bytes(r.size));
   }
 
-  // 지출처 추천 목록
-  const all = await dbAll('entries');
-  const seen = [...new Set(all.map(x => x.place).filter(Boolean))].slice(0, 200);
-  $('placeList').innerHTML = seen.map(p => '<option></option>').join('');
-  [...$('placeList').children].forEach((o, i) => o.value = seen[i]);
+  // 지출처·사용내용 추천 목록 (이전에 입력한 것)
+  historyEntries = await dbAll('entries');
+  refreshSuggestLists();
 
   pushSheet('form');
   $('formSheet').classList.add('on');
@@ -1471,8 +1659,12 @@ function closeForm() {
   $('formSheet').classList.remove('on');
   $('formSheet').setAttribute('aria-hidden', 'true');
   syncBodyScrollLock();
-  if (state.photoUrl) { URL.revokeObjectURL(state.photoUrl); state.photoUrl = null; }
   state.photo = null;
+  state.keepReceiptId = null;
+  // 닫는 시점에 사진 칸을 확실히 비워 둡니다. 다음에 폼을 열 때도 다시
+  // 비우지만, 어느 경로로 닫히든 앞의 영수증이 남지 않도록 여기서도
+  // 정리합니다(사진 주소 해제까지 showPhoto 가 함께 처리합니다).
+  showPhoto(null);
 }
 
 async function pickFile(file) {
