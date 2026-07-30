@@ -551,6 +551,21 @@ textarea.inp{height:auto;padding:12px 13px;resize:none;line-height:1.5}
 
     <div class="panel">
       <h3>차량운행 기록 설정</h3>
+      <div class="field" style="margin-top:6px">
+        <label for="pCarNo">차량번호 (선택, 차량운행일지에 표시)</label>
+        <input class="inp" id="pCarNo" type="text" placeholder="예: 12가3456" autocomplete="off">
+      </div>
+      <div class="field">
+        <label for="pDept">부서 (선택)</label>
+        <input class="inp" id="pDept" type="text" placeholder="예: 영업부" autocomplete="off">
+      </div>
+      <div class="field">
+        <label for="pLoc">근무지 (선택)</label>
+        <input class="inp" id="pLoc" type="text" placeholder="예: 본사" autocomplete="off">
+      </div>
+      <p class="note" style="margin-bottom:10px">
+        모두 비워 두어도 됩니다. 입력한 항목만 차량운행일지 상단에 표시됩니다.
+      </p>
       <div class="row">
         <span class="k">주행거리로 유류비 자동계산</span>
         <span class="v" id="fuelToggleState">꺼짐</span>
@@ -1740,13 +1755,19 @@ async function loadProfile() {
   $('pName').value = (p && p.name) || '';
   $('pCompany').value = (p && p.company) || '';
   $('pPrefix').value = (p && p.prefix) || '';
+  $('pCarNo').value = (p && p.carNo) || '';
+  $('pDept').value = (p && p.dept) || '';
+  $('pLoc').value = (p && p.loc) || '';
   updateFileNamePreview();
 }
 async function saveProfileName() {
   const name = $('pName').value.trim();
   const company = $('pCompany').value.trim();
   const prefix = $('pPrefix').value.trim();
-  await dbPut('meta', { k: 'profile', name, company, prefix });
+  const carNo = $('pCarNo').value.trim();
+  const dept = $('pDept').value.trim();
+  const loc = $('pLoc').value.trim();
+  await dbPut('meta', { k: 'profile', name, company, prefix, carNo, dept, loc });
   updateFileNamePreview();
 }
 
@@ -2002,39 +2023,108 @@ async function buildCoverPage(grouped, order) {
     '</div>';
 }
 
-function buildVehicleLogPage() {
+async function buildVehicleLogPage() {
   if (!state.runs.length) return '';
   const [y, m] = state.ym.split('-');
   const year = Number(y), month = Number(m);
   const lastDay = new Date(year, month, 0).getDate();
   const runMap = new Map(state.runs.map(r => [r.date, r]));
-  let totalKm = 0;
+  const rate = (CFG.vehicleLog && CFG.vehicleLog.kmRate) || 250;
+  const profile = (await dbGet('meta', 'profile')) || {};
+
+  // 차량운행일지는 "주유비·주차비·통행비·교통비" 네 과목만 날짜로 연동합니다.
+  // (식대비·기타는 차량 운행과 관계가 없어 여기서는 다루지 않습니다)
+  const LINK_CATS = ['주유비', '주차비', '통행비', '교통비'];
+  const byDate = {};
+  state.entries.forEach(e => {
+    if (LINK_CATS.indexOf(e.cat) < 0) return;
+    if (!byDate[e.date]) byDate[e.date] = { 주유비: 0, 주차비: 0, 통행비: 0, 교통비: 0 };
+    byDate[e.date][e.cat] += e.amount;
+  });
+
+  let totalKm = 0, totalOil = 0, totalPark = 0, totalToll = 0, totalTrans = 0;
   const rows = [];
   for (let day = 1; day <= lastDay; day++) {
     const dateStr = year + '-' + pad2(month) + '-' + pad2(day);
     const r = runMap.get(dateStr);
     const km = r ? (r.km || 0) : 0;
-    totalKm += km;
+    const exp = byDate[dateStr] || { 주유비: 0, 주차비: 0, 통행비: 0, 교통비: 0 };
+    // "주행거리로 유류비 자동계산"이 켜져 있으면(설정 화면), 그날의 주유비는
+    // 실제 입력값 대신 km×단가로 계산해 보여줍니다. 관리부 제출 파일과 동일한 규칙입니다.
+    const oilAmt = vehiclePref.autoFuelFromKm ? Math.round(km * rate) : exp.주유비;
+    totalKm += km; totalOil += oilAmt; totalPark += exp.주차비; totalToll += exp.통행비; totalTrans += exp.교통비;
+
     const dow = new Date(year, month - 1, day).getDay();
-    let bg = r ? '#ffffff' : '#eeeeee';
-    if (dow === 0) bg = r ? '#ffe8e8' : '#f5d0d0';
-    if (dow === 6) bg = r ? '#e8eeff' : '#d0d6f5';
+    const hasData = km || oilAmt || exp.주차비 || exp.통행비 || exp.교통비;
+    let bg = hasData ? '#ffffff' : '#eeeeee';
+    if (dow === 0) bg = hasData ? '#ffe8e8' : '#f5d0d0';
+    if (dow === 6) bg = hasData ? '#e8eeff' : '#d0d6f5';
+    const fv = n => n ? comma(n) : '';
     rows.push('<tr style="height:5.5mm">' +
       '<td style="border:1px solid black;background:' + bg + ';text-align:center;font-size:8.5pt;font-weight:700">' + day + '</td>' +
-      '<td style="border:1px solid black;background:' + bg + ';text-align:left;font-size:8pt;padding-left:1.5mm">' +
+      '<td style="border:1px solid black;background:' + bg + ';text-align:left;font-size:8pt;padding-left:1.5mm;overflow:hidden;white-space:nowrap">' +
       (r ? esc((r.from || '') + ' → ' + (r.to || '')) : '') + '</td>' +
-      '<td style="border:1px solid black;background:' + bg + ';text-align:right;font-size:8pt;padding-right:2mm">' +
-      (km ? comma(km) : '') + '</td></tr>');
+      '<td style="border:1px solid black;background:' + bg + ';text-align:right;font-size:8pt;padding-right:2mm">' + (km ? comma(km) : '') + '</td>' +
+      '<td style="border:1px solid black;background:' + bg + ';text-align:right;font-size:8pt;padding-right:2mm">' + fv(oilAmt) + '</td>' +
+      '<td style="border:1px solid black;background:' + bg + ';text-align:right;font-size:8pt;padding-right:2mm">' + fv(exp.주차비) + '</td>' +
+      '<td style="border:1px solid black;background:' + bg + ';text-align:right;font-size:8pt;padding-right:2mm">' + fv(exp.통행비) + '</td>' +
+      '<td style="border:1px solid black;background:' + bg + ';text-align:right;font-size:8pt;padding-right:2mm">' + fv(exp.교통비) + '</td>' +
+      '</tr>');
   }
+  const etcTotal = totalPark + totalToll + totalTrans;
+  const grandTotal = totalOil + etcTotal;
+
+  // 상단 정보줄: 입력해 둔 항목만 보여줍니다 (모두 선택 입력이라 비어 있을 수 있음)
+  const infoParts = [];
+  if (profile.carNo) infoParts.push('차량번호 : ' + esc(profile.carNo));
+  if (profile.dept) infoParts.push('부서 : ' + esc(profile.dept));
+  if (profile.loc) infoParts.push('근무지 : ' + esc(profile.loc));
+  infoParts.push('성명 : ' + esc(profile.name || ''));
+  const infoBar = '<div style="border:1px solid black;border-top:none;background:#f0f0f0;' +
+    'font-size:9pt;font-weight:700;padding:1.8mm 3mm">' + infoParts.join('&nbsp;&nbsp;&nbsp;&nbsp;') + '</div>';
+
   return '<div class="pv-vlog">' +
-    '<div style="text-align:center;font-size:16pt;font-weight:700;letter-spacing:6px;margin:2mm 0">차 량 운 행 일 지</div>' +
-    '<div style="border-bottom:1.5px solid black;margin-bottom:2mm"></div>' +
-    '<div style="font-size:9pt;text-align:center;margin-bottom:3mm">' + year + '년 ' + month + '월 · 이번 달 총 주행거리 ' + comma(totalKm) + 'km</div>' +
-    '<table class="pv-table" style="table-layout:fixed">' +
-    '<colgroup><col style="width:10%"><col><col style="width:20%"></colgroup><tbody>' +
+    '<div style="border:1px solid black;height:20mm;display:flex;flex-direction:column;' +
+    'align-items:center;justify-content:center">' +
+    '<span style="font-size:16pt;font-weight:700;letter-spacing:6px">차 량 운 행 일 지</span>' +
+    '<span style="font-size:10pt;font-weight:700;margin-top:1.5mm">' + year + '년 ' + pad2(month) + '월</span>' +
+    '</div>' +
+    infoBar +
+    '<table class="pv-table" style="table-layout:fixed;margin-top:3mm">' +
+    '<colgroup><col style="width:7%"><col><col style="width:11%"><col style="width:14%">' +
+    '<col style="width:14%"><col style="width:14%"><col style="width:14%"></colgroup><tbody>' +
     '<tr style="background:#f0f0f0"><td style="font-weight:700">일자</td>' +
-    '<td style="font-weight:700">출발지 → 목적지</td><td style="font-weight:700">주행거리(km)</td></tr>' +
-    rows.join('') + '</tbody></table></div>';
+    '<td style="font-weight:700">행&nbsp;&nbsp;&nbsp;선&nbsp;&nbsp;&nbsp;지</td>' +
+    '<td style="font-weight:700">Km</td>' +
+    '<td style="font-weight:700">유류비</td>' +
+    '<td style="font-weight:700">주차비</td>' +
+    '<td style="font-weight:700">통행비</td>' +
+    '<td style="font-weight:700">교통비</td></tr>' +
+    rows.join('') + '</tbody></table>' +
+    '<table style="width:100%;border-collapse:collapse;table-layout:fixed">' +
+    '<colgroup><col style="width:18%"><col style="width:22%"><col style="width:22%"><col></colgroup><tbody>' +
+    '<tr style="height:9mm">' +
+    '<td rowspan="3" style="border:1px solid black;border-top:none;text-align:center;vertical-align:middle;' +
+    'font-size:12pt;font-weight:700;letter-spacing:3px">합&nbsp;&nbsp;계</td>' +
+    '<td rowspan="3" style="border:1px solid black;border-top:none;text-align:center;vertical-align:middle;' +
+    'font-size:12pt;font-weight:700">₩&nbsp;' + comma(grandTotal) + '</td>' +
+    '<td style="border:1px solid black;border-top:none;padding:1mm 2mm;font-size:8.5pt">총운행거리(Km)</td>' +
+    '<td style="border:1px solid black;border-top:none;text-align:right;padding-right:3mm;' +
+    'font-size:9pt;font-weight:700">' + comma(totalKm) + ' km</td></tr>' +
+    '<tr style="height:9mm">' +
+    '<td style="border:1px solid black;padding:1mm 2mm;font-size:8.5pt">총&nbsp;유&nbsp;류&nbsp;비</td>' +
+    '<td style="border:1px solid black;text-align:right;padding-right:3mm;font-size:9pt;font-weight:700">₩&nbsp;' +
+    comma(totalOil) + '</td></tr>' +
+    '<tr style="height:9mm">' +
+    '<td style="border:1px solid black;padding:1mm 2mm;font-size:8.5pt">총&nbsp;기&nbsp;타&nbsp;경&nbsp;비</td>' +
+    '<td style="border:1px solid black;text-align:right;padding-right:3mm;font-size:9pt;font-weight:700">₩&nbsp;' +
+    comma(etcTotal) + '</td></tr>' +
+    '</tbody></table>' +
+    (vehiclePref.autoFuelFromKm
+      ? '<div style="font-size:8pt;color:#555;margin-top:2mm">※ 유류비는 주행거리 × ' + comma(rate) +
+        '원/km 으로 자동계산된 금액입니다.</div>'
+      : '') +
+    '</div>';
 }
 
 async function buildPrintBodyHtml() {
@@ -2049,7 +2139,7 @@ async function buildPrintBodyHtml() {
     if (!items.length) continue;
     html += await buildCategoryBlock(cat, items, monthLabel);
   }
-  html += buildVehicleLogPage();
+  html += await buildVehicleLogPage();
   return html;
 }
 
@@ -2373,6 +2463,9 @@ $('btnPrint').onclick = makePrintout;
 $('pName').addEventListener('change', saveProfileName);
 $('pCompany').addEventListener('change', saveProfileName);
 $('pPrefix').addEventListener('change', saveProfileName);
+$('pCarNo').addEventListener('change', saveProfileName);
+$('pDept').addEventListener('change', saveProfileName);
+$('pLoc').addEventListener('change', saveProfileName);
 // 입력하는 즉시 파일명 미리보기를 갱신합니다(저장은 입력을 마칠 때 합니다).
 $('pName').addEventListener('input', updateFileNamePreview);
 $('pPrefix').addEventListener('input', updateFileNamePreview);
